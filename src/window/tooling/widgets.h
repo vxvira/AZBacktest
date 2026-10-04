@@ -46,6 +46,7 @@ inline void renderSeriesExplorer(Widget& widget, const std::string& windowId) {
 
     // Series picker
     const char* preview = widget.selectedSeriesIdx >= 0
+                       && widget.selectedSeriesIdx < (int)seriesPool::pool.size()
         ? seriesPool::pool[widget.selectedSeriesIdx].name.c_str()
         : "(select series)";
 
@@ -110,7 +111,8 @@ inline void renderSeriesExplorer(Widget& widget, const std::string& windowId) {
                 ImGui::Text("%d", row);
                 for (int col = 0; col < series.cols(); col++) {
                     ImGui::TableSetColumnIndex(1 + col);
-                    ImGui::Text("%.6f", series.data[col][row]);
+                    // rows() only counts column 0, a shorter column just leaves blanks
+                    if (row < (int)series.data[col].size()) ImGui::Text("%.6f", series.data[col][row]);
                 }
             }
         }
