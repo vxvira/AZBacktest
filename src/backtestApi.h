@@ -34,8 +34,8 @@
 /// @brief result of a single closed trade, profit, win/loss, and when it closed
 /// gets pushed into the global `trades` vec when a Trade is locked
 struct tradeData {
-    double profit; // pts
-    bool win;
+    double profit = 0.0; // pts
+    bool win = false;
     long long closeEpochSec = 0; // set by Handling on close
 };
 
@@ -175,6 +175,7 @@ public:
     /// already in a long (unless canOverlap is set)
     /// @param idx bar index for bookkeeping
     int openLong(int idx) {
+        if (inShort) return 0; // would drop the open short without ever closing it
         if (!inLong)              { newLong(idx);  return 1; }
         if (inLong && canOverlap) { newLong(idx);  return 1; }
         return 0;
@@ -183,6 +184,7 @@ public:
     /// @brief open a short at the current price, same rules as openLong
     /// @param idx bar index for bookkeeping
     int openShort(int idx) {
+        if (inLong) return 0; // same deal as openLong, don't clobber the long
         if (!inShort)              { newShort(idx); return 1; }
         if (inShort && canOverlap) { newShort(idx); return 1; }
         return 0;
@@ -191,6 +193,7 @@ public:
     /// @brief close the current open trade, stamps it with the last timestamp,
     /// locks the P&L, and resets position state
     void closeTrade() {
+        if (!openTrade) return; // nothing open, nothing to close
         // TODO - Overlapping trades support
         openTrade->td.closeEpochSec = lastEpochSec;
         
