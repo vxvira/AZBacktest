@@ -307,7 +307,7 @@ public:
                 processedBars++;
             }
         } else {
-            for (int i=0; i<period; i+=tickRes) {
+            for (int i=0; i<period; i++) { // tickRes is tick-by-tick only
                 auto bar = md.nextClose(timeframe);
                 if (!bar) break;
                 double px = 0.0;
