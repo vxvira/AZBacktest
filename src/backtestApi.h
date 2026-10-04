@@ -26,6 +26,7 @@
 #include <map>
 #include <variant>
 #include <stdexcept>
+#include <numeric>
 #include "marketData.h"
 #include "dataConfig.h"
 #include "findEOF.h"
@@ -865,7 +866,7 @@ double returnTradesPerDay() {
 /// @param seed RNG seed, fixed by default so results are reproducible
 std::vector<std::vector<double>> returnMonteCarlo(int sims, int avgBlockLen = 5,
     int bucketSecs = 0, unsigned seed = 42) {
-    if (trades.empty() || sims <= 0) return {};
+    if (trades.empty() || sims <= 0 || avgBlockLen <= 0) return {}; // geometric dist needs p in (0, 1]
 
     // build the PnL series to bootstrap
     std::vector<double> pnls;
