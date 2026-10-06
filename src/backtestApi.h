@@ -121,10 +121,11 @@ public:
 
     tradeData td;
 
-    /// @brief update P&L to reflect `currentPrice` (call once per bar while open)
+    /// @brief update P&L to reflect `currentPrice` (call once per bar while open),
+    /// td.profit is in points, multiply by tickValue / tickSize for currency
     tradeData advanceIdx(double currentPrice) {
         if (!_lockTrade) {
-            double diff = (currentPrice - _entryPrice) / _tickSize * _tickValue;
+            double diff = currentPrice - _entryPrice;
             td.profit = (_direction == TradeDirection::Long) ? diff : -diff;
             td.win = td.profit > 0;
         }
