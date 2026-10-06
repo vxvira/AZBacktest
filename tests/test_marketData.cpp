@@ -571,3 +571,21 @@ TEST(skipLineReturnsFalseAtEof) {
     CHECK_EQ(skipped, 6); // header folded into the first call, then 5 more rows
     CHECK(!md.skipLine());
 }
+
+TEST(nextCloseReportsOHLC) {
+    useFixtureMapping();
+    TempCsv csv(azt::basicTicks());
+    MarketData md(csv.path());
+
+    auto bar1 = md.nextClose(60);
+    REQUIRE(bar1.has_value());
+    CHECK_F(bar1->open, 5000.25);
+    CHECK_F(bar1->high, 5001.00);
+    CHECK_F(bar1->low,  5000.25);
+
+    auto bar2 = md.nextClose(60);
+    REQUIRE(bar2.has_value());
+    CHECK_F(bar2->open, 5000.50);
+    CHECK_F(bar2->high, 5000.50);
+    CHECK_F(bar2->low,  5000.25);
+}

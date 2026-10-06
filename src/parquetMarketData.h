@@ -405,7 +405,8 @@ public:
 
     /// @brief bar close over `seconds`, volume summed and split per aggressor
     /// side, mirrors _MarketData::nextClose. t.side, the resting sizes, the
-    /// bid/ask prices, ts_event, row number and action are all the closing row's
+    /// bid/ask prices, ts_event, row number and action are all the closing row's,
+    /// t.open / t.high / t.low are the first, highest and lowest price in the bar
     std::optional<Tick> nextClose(int seconds) {
         if (!advanceToNextMatch()) return std::nullopt;
 
@@ -435,6 +436,7 @@ public:
         };
 
         double lastPx = curPrice();
+        double openPx = lastPx, highPx = lastPx, lowPx = lastPx;
         // resting sizes are book snapshots, summing them across the bar would be
         // meaningless, so they track the closing row alongside the price
         double lastBid = curRestingBid(), lastAsk = curRestingAsk();
@@ -458,6 +460,8 @@ public:
             int len = mdDetail::formatIsoTimestamp(_tsBuf, sizeof(_tsBuf), curTsNanos());
             lastTs.assign(_tsBuf, static_cast<std::size_t>(len));
             lastPx  = curPrice();
+            highPx  = std::max(highPx, lastPx);
+            lowPx   = std::min(lowPx, lastPx);
             lastBid = curRestingBid();
             lastAsk = curRestingAsk();
             lastBidPx = curBidPrice();
@@ -482,6 +486,9 @@ public:
         t.rowNumber = lastRowNum;
         auto [ptr, ec] = std::to_chars(_pxBuf, _pxBuf + sizeof(_pxBuf), lastPx);
         t.price = std::string_view(_pxBuf, static_cast<std::size_t>(ptr - _pxBuf));
+        t.open = openPx;
+        t.high = highPx;
+        t.low  = lowPx;
         t.size = barVolume;
         // rowSide is left pointing at the last row accumulate() saw, i.e. the close
         if (rowSide) t.side = rowSide;

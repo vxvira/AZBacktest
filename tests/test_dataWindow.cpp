@@ -14,6 +14,9 @@ using azt::useFixtureMapping;
 // unconditionally this is the test that catches it
 static void checkParallelLengths(const DataWindow& w) {
     std::size_t n = w.prices.size();
+    CHECK_EQ(w.opens.size(),         n);
+    CHECK_EQ(w.highs.size(),         n);
+    CHECK_EQ(w.lows.size(),          n);
     CHECK_EQ(w.volumes.size(),       n);
     CHECK_EQ(w.executedBuys.size(),  n);
     CHECK_EQ(w.executedSells.size(), n);
@@ -412,4 +415,44 @@ TEST(barModeDeltasAreOrderflowDelta) {
     REQUIRE(w.deltas.size() == 2);
     CHECK_F(w.deltas[0],  1.0);      // bar1: buys=8, sells=7 -> 1
     CHECK_F(w.deltas[1],  2.0);      // bar2: buys=6, sells=4 -> 2
+}
+
+// bar1 trades 5000.25 -> 5000.50 -> 5000.75 -> 5001.00, bar2 5000.50 -> 5000.25
+TEST(barModeReportsOHLC) {
+    useFixtureMapping();
+    TempCsv csv(azt::basicTicks());
+    MarketData md(csv.path());
+
+    std::vector<double> prices;
+    Handling h(prices, 0.25, 12.5, false);
+    auto w = h.requestDataWindow(md, 10, 60);
+
+    REQUIRE(w.prices.size() == 2);
+    checkParallelLengths(w);
+    CHECK_F(w.opens[0],  5000.25);
+    CHECK_F(w.highs[0],  5001.00);
+    CHECK_F(w.lows[0],   5000.25);
+    CHECK_F(w.prices[0], 5001.00);
+    CHECK_F(w.opens[1],  5000.50);
+    CHECK_F(w.highs[1],  5000.50);
+    CHECK_F(w.lows[1],   5000.25);
+    CHECK_F(w.prices[1], 5000.25);
+}
+
+// a tick has no range, so open/high/low all repeat its price
+TEST(tickModeOHLCRepeatsPrice) {
+    useFixtureMapping();
+    TempCsv csv(azt::basicTicks());
+    MarketData md(csv.path());
+
+    std::vector<double> prices;
+    Handling h(prices, 0.25, 12.5, false);
+    auto w = h.requestDataWindow(md, 10);
+
+    REQUIRE(w.prices.size() == 6);
+    for (int i = 0; i < 6; i++) {
+        CHECK_F(w.opens[i], w.prices[i]);
+        CHECK_F(w.highs[i], w.prices[i]);
+        CHECK_F(w.lows[i],  w.prices[i]);
+    }
 }

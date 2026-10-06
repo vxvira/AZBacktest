@@ -6,6 +6,7 @@
 
 #include "dataConfig.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cstdio>
 #include <cstddef>
@@ -62,10 +63,17 @@
 /// (-1 disables). Same snapshot rules again: tsEvent stays an empty
 /// string_view and rowNumber stays 0 when their column isn't configured,
 /// and nextClose reports the closing row's value for both.
+///
+/// open/high/low are bar aggregates from nextClose: the first row's price, and
+/// the highest/lowest price across every row in the bar (`price` is the close).
+/// nextTick leaves all three at 0, a single tick has no range.
 struct Tick {
     std::string_view tsRecv;   // ts_recv: what nextClose windows bars by
     std::string_view tsEvent;  // ts_event, empty when tsEventCol is -1
     std::string_view price;
+    double open = 0.0; // nextClose only, first row's price
+    double high = 0.0; // nextClose only, highest price in the bar
+    double low  = 0.0; // nextClose only, lowest price in the bar
     double size = 0.0;
     const char* side = kCSVMapping.unknownSideAggressorAlias;
     double executedBuys   = 0.0;
@@ -512,7 +520,8 @@ public:
     /// aggressor column. t.side is the side of the closing tick specifically
     /// (same row the timestamp and price come from), not the bar as a whole,
     /// and t.restingBids / t.restingAsks / t.bidPrice / t.askPrice / t.action
-    /// are that same closing row's book, quote and action
+    /// are that same closing row's book, quote and action. t.open / t.high /
+    /// t.low are the first, highest and lowest price across the bar
     /// @return the close tick (views into the underlying buffer), or nullopt at EOF
     std::optional<Tick> nextClose(int seconds) {
         _skipHeaderOnce();
@@ -526,11 +535,20 @@ public:
         std::string_view target(targetOwned);
 
         double barVolume = 0.0, buys = 0.0, sells = 0.0, unknown = 0.0;
+        double open = 0.0, high = 0.0, low = 0.0;
+        bool firstRow = true;
         // the row's side alias, or nullptr when side classification is disabled
         const char* rowSide = nullptr;
 
-        // parse one row's size and fold it into the running per-side totals
+        // parse one row's size and price and fold them into the running
+        // per-side totals and the bar's range
         auto accumulate = [&](const char* l, const char* e) {
+            std::string_view pxView = mdDetail::field(l, e, kCSVMapping.priceCol);
+            double px = 0.0;
+            std::from_chars(pxView.data(), pxView.data() + pxView.size(), px);
+            if (firstRow) { open = high = low = px; firstRow = false; }
+            else { high = std::max(high, px); low = std::min(low, px); }
+
             std::string_view szView = mdDetail::field(l, e, kCSVMapping.sizeCol);
             double sz = 0.0;
             std::from_chars(szView.data(), szView.data() + szView.size(), sz);
@@ -568,6 +586,9 @@ public:
         Tick t;
         t.tsRecv = lastTs;
         t.price  = mdDetail::field(lastLine, lastEol, kCSVMapping.priceCol);
+        t.open   = open;
+        t.high   = high;
+        t.low    = low;
         t.size   = barVolume;
         // rowSide is left pointing at the last row accumulate() saw, i.e. the close
         if (rowSide) t.side = rowSide;
