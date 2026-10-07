@@ -3,7 +3,7 @@
 
 #include "tests/testFramework.h"
 
-#include "src/backtestApi.h"
+#include "src/analytics/SetAnalytics.h"
 
 TEST(perfectPositiveLinearCorrelationIsOne) {
     std::vector<double> x = {1, 2, 3, 4, 5};

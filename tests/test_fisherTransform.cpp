@@ -3,7 +3,7 @@
 
 #include "tests/testFramework.h"
 
-#include "src/backtestApi.h"
+#include "src/analytics/SetAnalytics.h"
 
 #include <stdexcept>
 
