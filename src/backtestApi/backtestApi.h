@@ -201,12 +201,12 @@ class TradeApi {
     bool _calculateCosts;
 
     void newLong(int idx) {
-        openTrade.emplace(_prices.back(), idx, _tickSize, _tickValue, TradeDirection::Long);
+        openTrade.emplace(_prices.back(), idx, _tickSize, _tickValue, TradesInfo::TradeDirection::Long);
         inLong = true;
     }
 
     void newShort(int idx) {
-        openTrade.emplace(_prices.back(), idx, _tickSize, _tickValue, TradeDirection::Short);
+        openTrade.emplace(_prices.back(), idx, _tickSize, _tickValue, TradesInfo::TradeDirection::Short);
         inShort = true;
     }
 
@@ -221,6 +221,7 @@ public:
 
     // Trade management
     std::optional<Trade> openTrade;
+    TradesInfo info; // closed trades + equity curve, hand this to PnlAnalytics
     bool inLong = false;
     bool inShort = false;
 
@@ -254,10 +255,10 @@ public:
         // TODO - Overlapping trades support
         openTrade->td.closeEpochSec = lastEpochSec;
         
-        if (_calculateCosts) realizedProfit += (openTrade->td.profit - (kCSVMapping.commision + kCSVMapping.spread + kCSVMapping.timingCost));
-        else realizedProfit += openTrade->td.profit;
+        if (_calculateCosts) info.realizedProfit += (openTrade->td.profit - (kCSVMapping.commision + kCSVMapping.spread + kCSVMapping.timingCost));
+        else info.realizedProfit += openTrade->td.profit;
 
-        openTrade->lockTrade(); openTrade.reset(); inLong=false; inShort=false;
+        info.trades.push_back(openTrade->lockTrade()); openTrade.reset(); inLong=false; inShort=false;
     }
 
     /// @brief close everything, call this at end-of-data so you don't
@@ -275,11 +276,11 @@ public:
         if (openTrade) openTrade->advanceIdx(_prices.back());
         lastEpochSec = epochSec;
         double unreal = openTrade ? openTrade->td.profit : 0.0;
-        double eq = realizedProfit + unreal;
-        if (!equityCurve.empty() && equityCurve.back().first == epochSec) {
-            equityCurve.back().second = eq;
+        double eq = info.realizedProfit + unreal;
+        if (!info.equityCurve.empty() && info.equityCurve.back().first == epochSec) {
+            info.equityCurve.back().second = eq;
         } else {
-            equityCurve.emplace_back(epochSec, eq);
+            info.equityCurve.emplace_back(epochSec, eq);
         }
         return {inLong, inShort};
     }
@@ -291,4 +292,6 @@ public:
         }
         return tick(mdDetail::tsToEpochSeconds(timestamp));
     }
+
+    std::vector<TradesInfo::tradeData> returnTradesVector() { return info.trades; }
 };

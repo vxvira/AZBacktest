@@ -82,9 +82,10 @@ int main() {
 
     // monte carlo (daily bucketed)
     const int mcSims = 60;
-    auto mcPaths  = returnMonteCarlo(mcSims, 5, 86400);
+    PnlAnalytics pnl(tradeApi.info);
+    auto mcPaths  = pnl.returnMonteCarlo(mcSims, 5, 86400);
     auto pctPaths = returnPercentilePaths(mcPaths, {5, 50, 95});
-    auto profit   = returnCumProfitBucketed(86400);
+    auto profit   = pnl.returnCumProfitBucketed(86400);
 
     std::vector<std::vector<double>> mainPaths;
     mainPaths.push_back(profit);

@@ -46,7 +46,7 @@ int main() {
     }
     tradeApi.closeAll();
 
-    auto profit = returnProfitOverTime(1440);
+    auto profit = PnlAnalytics(tradeApi.info).returnProfitOverTime(1440);
     addLine("equity", std::vector<std::vector<double>>{profit}, {"actual"},
             RGBA{0.5f, 0.8f, 0.5f, 1.0f});
 
