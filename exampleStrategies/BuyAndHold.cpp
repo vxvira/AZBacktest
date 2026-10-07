@@ -1,7 +1,7 @@
 #include <iostream>
 #include <vector>
 
-#include "../src/backtestApi.h"
+#include "../src/backtestApi/backtestApi.h"
 #include "../src/initSeries.h"
 #include "../src/window/window.h"
 #include "../src/skins/light.h"
@@ -12,38 +12,39 @@
 int main() {
     loadConfig();
 
-    // Handling reads prices.back() as "the price right now", so this vector only
+    // TradeApi reads prices.back() as "the price right now", so this vector only
     // ever holds the bar being processed
     std::vector<double> prices;
     MarketData md(kCSVMapping.path);
-    Handling handler(prices, 0.25, 0.50);
+    DataApi  dataApi(prices, 0.25, 0.50);
+    TradeApi tradeApi(prices, 0.25, 0.50);
 
     const int timeframe = 60;   // seconds per bar
     const int batchSize = 500;  // rows per read, an io detail, not a strategy knob
 
-    handler.fetchEOF(timeframe);
+    dataApi.fetchEOF(timeframe);
 
     int bar = 0;
     for (;;) {
-        DataWindow window = handler.requestDataWindow(md, batchSize, timeframe);
+        DataWindow window = dataApi.requestDataWindow(md, batchSize, timeframe);
         if (window.prices.empty()) break;
 
         for (std::size_t b = 0; b < window.prices.size(); b++, bar++) {
             if (bar % 5000 == 0)
-                std::cout << "  bar " << bar << " / " << handler.eof << std::endl;
+                std::cout << "  bar " << bar << " / " << dataApi.eof << std::endl;
 
             prices.assign(1, window.prices[b]);
 
             // mark the open trade to this bar and stamp the equity curve. the
             // timestamp matters, without it trades close at epoch 0 and anything
             // time bucketed downstream collapses into one bucket
-            handler.tick(window.tsRecv[b]);
+            tradeApi.tick(window.tsRecv[b]);
 
             // buy the first bar, then just sit in it until closeAll below
-            if (!handler.inLong) handler.openLong(bar);
+            if (!tradeApi.inLong) tradeApi.openLong(bar);
         }
     }
-    handler.closeAll();
+    tradeApi.closeAll();
 
     auto profit = returnProfitOverTime(1440);
     addLine("equity", std::vector<std::vector<double>>{profit}, {"actual"},

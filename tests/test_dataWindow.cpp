@@ -1,10 +1,10 @@
-// Unit tests for Handling::requestDataWindow, the layer that turns Ticks into
+// Unit tests for DataApi::requestDataWindow, the layer that turns Ticks into
 // the parallel vectors a strategy actually reads.
 
 #include "tests/testFramework.h"
 #include "tests/fakeData.h"
 
-#include "src/backtestApi.h"
+#include "src/backtestApi/backtestApi.h"
 
 using azt::TempCsv;
 using azt::useFixtureMapping;
@@ -39,7 +39,7 @@ TEST(tickModeReturnsEveryRow) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10);
 
     CHECK_EQ(w.prices.size(), (std::size_t)6);
@@ -52,7 +52,7 @@ TEST(tickModeParsesPricesAndVolumes) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10);
     REQUIRE(w.prices.size() == 6);
 
@@ -70,7 +70,7 @@ TEST(tickModeCarriesRestingBookThrough) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10);
     REQUIRE(w.restingBids.size() == 6);
 
@@ -88,7 +88,7 @@ TEST(tickModeCarriesBidAskPricesThrough) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10);
     REQUIRE(w.bidPrices.size() == 6);
     REQUIRE(w.askPrices.size() == 6);
@@ -110,7 +110,7 @@ TEST(tickModeBidAskVectorsStayParallelWhenUnmapped) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10);
 
     checkParallelLengths(w);
@@ -130,7 +130,7 @@ TEST(tickModeRestingVectorsStayParallelWhenUnmapped) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10);
 
     checkParallelLengths(w);
@@ -147,7 +147,7 @@ TEST(tickModeSplitsVolumeByAggressor) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10);
     REQUIRE(w.prices.size() == 6);
 
@@ -168,7 +168,7 @@ TEST(deltasAreOrderflowDelta) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10);
     REQUIRE(w.deltas.size() == 6);
 
@@ -188,7 +188,7 @@ TEST(deltasAreConsistentAcrossBatches) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
 
     auto first = h.requestDataWindow(md, 3);
     REQUIRE(first.prices.size() == 3);
@@ -206,7 +206,7 @@ TEST(periodLongerThanFileStopsAtEof) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 500);
 
     CHECK_EQ(w.prices.size(), (std::size_t)6);
@@ -219,7 +219,7 @@ TEST(tsRecvIsParallelToPrices) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10);
 
     CHECK_EQ(w.tsRecv.size(), w.prices.size());
@@ -237,7 +237,7 @@ TEST(tsEventAndRowNumberStayParallelWhenUnmapped) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10);
 
     checkParallelLengths(w);
@@ -256,7 +256,7 @@ TEST(tickResKeepsEveryNthTick) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 3, 0, [](){}, 2);
 
     REQUIRE(w.prices.size() == 3);
@@ -280,7 +280,7 @@ TEST(whenUnknownFiresForUnclassifiableVolume) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     unknownHits = 0;
     h.requestDataWindow(md, 10, 0, [](){ unknownHits++; });
 
@@ -295,7 +295,7 @@ TEST(whenUnknownNeverFiresWhenEverySideClassifies) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     unknownHits = 0;
     h.requestDataWindow(md, 10, 0, [](){ unknownHits++; });
 
@@ -312,7 +312,7 @@ TEST(tsEventAndRowNumberAreParsedWhenMapped) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10);
     REQUIRE(w.tsEvent.size() == 6);
 
@@ -340,7 +340,7 @@ TEST(barModeAggregatesVolumePerBar) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10, 60);
 
     REQUIRE(w.prices.size() == 2);
@@ -357,7 +357,7 @@ TEST(barModeSumsAggressorSplit) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10, 60);
 
     REQUIRE(w.prices.size() == 2);
@@ -375,7 +375,7 @@ TEST(barModeRestingSizesAreTheClosingSnapshot) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10, 60);
 
     REQUIRE(w.prices.size() == 2);
@@ -392,7 +392,7 @@ TEST(barModeBidAskPricesAreTheClosingSnapshot) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10, 60);
 
     REQUIRE(w.prices.size() == 2);
@@ -409,7 +409,7 @@ TEST(barModeDeltasAreOrderflowDelta) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10, 60);
 
     REQUIRE(w.deltas.size() == 2);
@@ -424,7 +424,7 @@ TEST(barModeReportsOHLC) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10, 60);
 
     REQUIRE(w.prices.size() == 2);
@@ -446,7 +446,7 @@ TEST(tickModeOHLCRepeatsPrice) {
     MarketData md(csv.path());
 
     std::vector<double> prices;
-    Handling h(prices, 0.25, 12.5, false);
+    DataApi h(prices, 0.25, 12.5);
     auto w = h.requestDataWindow(md, 10);
 
     REQUIRE(w.prices.size() == 6);

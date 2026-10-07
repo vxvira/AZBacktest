@@ -1,8 +1,8 @@
-// Unit tests for Trade/Handling P&L, which is tracked in points
+// Unit tests for Trade/TradeApi P&L, which is tracked in points
 
 #include "tests/testFramework.h"
 
-#include "src/backtestApi.h"
+#include "src/backtestApi/backtestApi.h"
 
 TEST(longProfitIsInPoints) {
     Trade t(5000.0, 0, 0.25, 0.50, TradeDirection::Long);
@@ -18,7 +18,7 @@ TEST(shortProfitIsInPoints) {
 
 TEST(closedTradeKeepsPoints) {
     std::vector<double> prices{5000.0};
-    Handling h(prices, 0.25, 0.50, false);
+    TradeApi h(prices, 0.25, 0.50, false);
     h.openLong(0);
     prices.back() = 5012.5;
     h.tick(1);
