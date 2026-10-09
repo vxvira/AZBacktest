@@ -7,7 +7,7 @@
 #   azbacktest/azbacktest.h        - the amalgamated header (imgui + implot inlined)
 #   azbacktest/vendor/glfw/...     - glfw copied as-is, it's a prebuilt lib+dll
 #                                     so it can't be inlined into the header
-#   azbacktest/vendor/eigen/...    - eigen copied as-is, OLS.h keeps its
+#   azbacktest/vendor/eigen/...    - eigen copied as-is, OLS.h (behind #ifdef AZBT_OLS) keeps its
 #                                     <Eigen/Dense> include so add -Ivendor/eigen
 
 set -e

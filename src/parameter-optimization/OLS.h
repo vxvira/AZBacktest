@@ -1,4 +1,8 @@
 // @file Closed form OLS
+// Opt-in: #define AZBT_OLS before including (needs -Ivendor/eigen), so
+// users who never call fitOLS don't need Eigen on their include path.
+
+#ifdef AZBT_OLS
 
 #include <Eigen/Dense>
 
@@ -16,3 +20,5 @@ LinFit fitOLS(const Eigen::MatrixXd& X, const Eigen::VectorXd& y) {
     Eigen::VectorXd theta = A.colPivHouseholderQr().solve(y);
     return { theta.tail(p), theta(0) };
 }
+
+#endif // AZBT_OLS
