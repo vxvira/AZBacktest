@@ -1,4 +1,4 @@
-<img width="2559" height="1417" alt="AZBacktest C++ backtesting framework visualization window built with ImGui and ImPlot" src="https://github.com/user-attachments/assets/b4281c86-cd32-4adc-9f5e-32840e39445a" />
+<img width="2000" height="1105" alt="AZBacktest C++ backtesting framework visualization window built with ImGui and ImPlot" src="docs/screenshot.webp" />
 
 
 # AZBacktest: C++ Backtesting Framework for Tick Data
