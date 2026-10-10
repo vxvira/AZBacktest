@@ -270,6 +270,34 @@ if [[ $uses_eigen -eq 1 ]]; then
     EXTRA_INCLUDES+=(-I"$PROJECT_ROOT/vendor/eigen")
 fi
 
+# matplot++ isn't header-only, vendor/matplot holds its headers plus a MinGW
+# prebuilt libmatplot.a/libnodesoup.a (v1.2.1, same idea as glfw). it shells
+# out to gnuplot at runtime so that needs to be on PATH
+uses_matplot=0
+for f in "${SCANNED[@]}"; do
+    if grep -qE '^\s*#\s*include\s*[<"]matplot/' "$f"; then
+        uses_matplot=1; break
+    fi
+done
+if [[ $uses_matplot -eq 1 ]]; then
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        if [[ -f "/opt/homebrew/lib/libmatplot.a" ]] || [[ -f "/opt/homebrew/lib/libmatplot.dylib" ]]; then
+            MPP_PREFIX="/opt/homebrew"
+        elif [[ -f "/usr/local/lib/libmatplot.a" ]] || [[ -f "/usr/local/lib/libmatplot.dylib" ]]; then
+            MPP_PREFIX="/usr/local"
+        else
+            echo "Error: matplot++ not found. Install with: brew install matplotplusplus" >&2
+            exit 1
+        fi
+        EXTRA_INCLUDES+=(-I"$MPP_PREFIX/include")
+        EXTRA_LIBS+=(-L"$MPP_PREFIX/lib" -L"$MPP_PREFIX/lib/Matplot++" -lmatplot -lnodesoup)
+    else
+        EXTRA_INCLUDES+=(-I"$PROJECT_ROOT/vendor/matplot/include")
+        EXTRA_DEFINES+=(-DNOMINMAX)
+        EXTRA_LIBS+=(-L"$PROJECT_ROOT/vendor/matplot/lib" -lmatplot -lnodesoup -lgdi32)
+    fi
+fi
+
 # marketData.h always carries the Parquet backend behind #ifdef AZBT_PARQUET
 # (both in the src/ tree and inlined into the amalgamated azbacktest.h), so
 # detect it by grepping for that macro rather than a specific #include - it
