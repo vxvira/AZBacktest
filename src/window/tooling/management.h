@@ -88,6 +88,11 @@ struct Series {
     seriesPool::HeatmapAxes heatmapAxes; ///< optional row/column labelling (Heatmap kind only)
     std::vector<double> errors; ///< per-point error magnitude (ErrorBar kind only)
     float lineWidth = -1.0;    ///< line thickness in px, <=0 = let ImPlot pick (appended at the end so existing positional {...} initializers above stay valid)
+    int marker = -1;           ///< ImPlotMarker_ code, -1 = none
+    float markerSize = -1.0;   ///< marker size in px, <=0 = let ImPlot pick
+    float fillAlpha = -1.0;    ///< bar fill opacity 0..1, <0 = let ImPlot pick
+    std::string xLabel;        ///< x axis title, first child that sets one wins
+    std::string yLabel;        ///< y axis title, lands on y2 when onY2
 
     // provenance, used to persist + restore this child from the .ini: which pool
     // series it was pulled from (empty = raw data added via newLine/BarSeries,
