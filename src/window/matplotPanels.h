@@ -17,20 +17,24 @@ inline void openLineChart(const seriesPool::NamedSeries& series, std::string sav
     }
     if (series.cols() == 0) return;
 
-    std::vector<double> x(series.rows());          // shared x: 1..n
-    std::iota(x.begin(), x.end(), 1.0);
-
-    matplot::hold(matplot::on);                    // keep adding lines to the same axes
+    matplot::hold(matplot::on);
     std::vector<std::string> names;
+
     for (int c = 0; c < series.cols(); c++) {
-        matplot::plot(x, series.data[c]);
-        names.push_back(series.colName(c));        // falls back to "0", "1", ... if unnamed
+        matplot::plot(series.data[c])->use_y2(series.onY2)
+                                     .color({series.color.r, series.color.g, series.color.b})
+                                     .line_width((series.lineWidth < 0) ? 1 : series.lineWidth);
+                                     
+        names.push_back(series.colName(c));
     }
+
     matplot::hold(matplot::off);
 
     matplot::title(series.name);
     if (series.cols() > 1) matplot::legend(names);
 
     if (!saveTo.empty()) matplot::save(saveTo);
-    matplot::show();
+    matplot::wait();
 }
+
+inline void matplotShow() { matplot::show(); }
