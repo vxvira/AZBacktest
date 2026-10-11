@@ -138,4 +138,53 @@ inline void openHeatmapChart(const seriesPool::NamedSeries& series, std::string 
     matplot::wait();
 }
 
+// plot() does this automatically, but for some reason other methods dont?
+inline std::vector<double> matplotIndexX(size_t n) {
+    std::vector<double> x(n);
+    std::iota(x.begin(), x.end(), 1.0);
+    return x;
+}
+
+inline void openScatterChart(const seriesPool::NamedSeries& series, std::string saveTo = "") {
+    if (series.type != 3) {
+        std::cerr << "openScatterChart: series \"" << series.name << "\" isn't a scatter series\n";
+        return;
+    }
+    if (series.cols() == 0) return;
+
+    matplot::cla();
+    matplot::hold(matplot::on);
+    std::vector<std::string> names;
+
+    // styling shared by both layouts, scatter defaults to "o" when no marker was picked
+    auto style = [&](matplot::line_handle l) {
+        l->use_y2(series.onY2);
+        if (series.color.isSet()) l->color({series.color.r, series.color.g, series.color.b});
+        l->marker(series.marker >= 0 ? matplotMarker(series.marker) : "o");
+        if (series.markerSize > 0) l->marker_size(series.markerSize);
+    };
+
+    if (series.xyBars) {
+        // addXYScatter: data[0] is x, data[1] is y, one cloud
+        if (series.cols() < 2 || series.data[0].size() != series.data[1].size()) {
+            std::cerr << "openScatterChart: \"" << series.name << "\" x and y lengths don't match\n";
+            matplot::hold(matplot::off);
+            return;
+        }
+        style(matplot::scatter(series.data[0], series.data[1]));
+    } else {
+        // addScatter: each column plotted against its index, like a line without the line
+        for (int c = 0; c < series.cols(); c++) {
+            style(matplot::scatter(matplotIndexX(series.data[c].size()), series.data[c]));
+            names.push_back(series.colName(c));
+        }
+    }
+
+    matplot::hold(matplot::off);
+    matplotDecorate(series, names);
+
+    if (!saveTo.empty()) matplot::save(saveTo);
+    matplot::wait();
+}
+
 inline void matplotShow() { matplot::show(); }
