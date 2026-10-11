@@ -187,4 +187,36 @@ inline void openScatterChart(const seriesPool::NamedSeries& series, std::string 
     matplot::wait();
 }
 
+inline void openErrorBarChart(const seriesPool::NamedSeries& series, std::string saveTo = "") {
+    if (series.type != 4) {
+        std::cerr << "openErrorBarChart: series \"" << series.name << "\" isn't an errorbar series\n";
+        return;
+    }
+    if (series.cols() == 0) return;
+    if (series.onY2) std::cerr << "openErrorBarChart: matplot can't put error bars on y2, \"" << series.name << "\" goes on y1\n";
+
+    const auto& y = series.data[0];
+    matplot::cla();
+
+    if (series.errors.size() != y.size()) {
+        // ImPlot skips the bars when errors is empty, do the same and still show the line
+        if (!series.errors.empty())
+            std::cerr << "openErrorBarChart: \"" << series.name << "\" has " << series.errors.size()
+                      << " errors for " << y.size() << " points, drawing without bars\n";
+        auto l = matplot::plot(y);
+        if (series.color.isSet()) l->color({series.color.r, series.color.g, series.color.b});
+        if (series.lineWidth > 0) l->line_width(series.lineWidth);
+    } else {
+        auto e = matplot::errorbar(matplotIndexX(y.size()), y, series.errors);
+        if (series.color.isSet()) e->color({series.color.r, series.color.g, series.color.b});
+        if (series.lineWidth > 0) e->line_width(series.lineWidth);
+        if (series.marker >= 0)   e->marker(matplotMarker(series.marker));
+    }
+
+    matplotDecorate(series, {});
+
+    if (!saveTo.empty()) matplot::save(saveTo);
+    matplot::wait();
+}
+
 inline void matplotShow() { matplot::show(); }
