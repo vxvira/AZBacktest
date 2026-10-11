@@ -92,4 +92,50 @@ inline void openBarChart(const seriesPool::NamedSeries& series, std::string save
     matplot::wait();
 }
 
+inline void openHeatmapChart(const seriesPool::NamedSeries& series, std::string saveTo = "") {
+    if (series.type != 2) {
+        std::cerr << "openHeatmapChart: series \"" << series.name << "\" isn't a heatmap series\n";
+        return;
+    }
+    if (series.cols() != 1) return; // heatmaps keep everything flat in data[0]
+    if (series.onY2) std::cerr << "openHeatmapChart: matplot can't put heatmaps on y2, \"" << series.name << "\" goes on y1\n";
+
+    // rows * cols has to cover the flat vector exactly, or the slicing below reads past the end
+    const int R = series.heatmapRows, C = series.heatmapCols;
+    const auto& flat = series.data[0];
+    if (R <= 0 || C <= 0 || (size_t)R * C != flat.size()) {
+        std::cerr << "openHeatmapChart: \"" << series.name << "\" is " << R << "x" << C
+                  << " but has " << flat.size() << " values\n";
+        return;
+    }
+
+    std::vector<std::vector<double>> grid(R);
+    for (int i = 0; i < R; i++)
+        grid[i].assign(flat.begin() + i * C, flat.begin() + (i + 1) * C);
+
+    matplot::cla();
+    matplot::heatmap(grid);
+    matplot::colormap(matplot::palette::viridis()); // same map the ImPlot panel pushes
+
+    const auto& ax = series.heatmapAxes;
+    matplot::title(series.name);
+    if (!ax.xTitle.empty()) matplot::xlabel(ax.xTitle);
+    if (!ax.yTitle.empty()) matplot::ylabel(ax.yTitle);
+
+    if (!ax.xLabels.empty()) {
+        std::vector<std::string> xl(ax.xLabels);
+        xl.resize(C);
+        matplot::gca()->x_axis().ticklabels(xl);
+    }
+    if (!ax.yLabels.empty()) {
+        std::vector<std::string> yl(ax.yLabels);
+        yl.resize(R);
+        std::reverse(yl.begin(), yl.end());
+        matplot::gca()->y_axis().ticklabels(yl);
+    }
+
+    if (!saveTo.empty()) matplot::save(saveTo);
+    matplot::wait();
+}
+
 inline void matplotShow() { matplot::show(); }
