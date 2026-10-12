@@ -7,6 +7,7 @@
 #include <vector>
 #include <string>
 #include <numeric>
+#include <algorithm>
 #include <iostream>
 #include <matplot/matplot.h>
 
@@ -16,8 +17,23 @@ inline std::string matplotMarker(int marker) {
     return (marker >= 0 && marker < 10) ? specs[marker] : "";
 }
 
+// matplot's defaults are tuned for a 560x420 figure, so everything sized gets multiplied by this
+// to grow and shrink with whatever size gcf() was given
+inline float matplotScale() {
+    auto f = matplot::gcf();
+    return std::max(0.25f, std::min(f->width() / 560.f, f->height() / 420.f));
+}
+
+// fonts follow the figure too, 10 is matplot's default for both
+inline void matplotScaleFonts() {
+    const float s = matplotScale();
+    matplot::gcf()->font_size(10.f * s);
+    matplot::gca()->font_size(10.f * s);
+}
+
 // title, axis labels and legend, shared by every chart kind
 inline void matplotDecorate(const seriesPool::NamedSeries& series, const std::vector<std::string>& names) {
+    matplotScaleFonts();
     matplot::title(series.name);
     if (!series.xLabel.empty()) matplot::xlabel(series.xLabel);
     if (!series.yLabel.empty()) {
@@ -37,16 +53,17 @@ inline void openLineChart(const seriesPool::NamedSeries& series, std::string sav
     matplot::cla();
     matplot::hold(matplot::on);
     std::vector<std::string> names;
+    const float s = matplotScale();
 
     for (int c = 0; c < series.cols(); c++) {
         auto l = matplot::plot(series.data[c]);
         l->use_y2(series.onY2)
-          .line_width((series.lineWidth <= 0) ? 1 : series.lineWidth);
+          .line_width(((series.lineWidth <= 0) ? 1 : series.lineWidth) * s);
 
         // unset colour is -1s, let matplot's palette pick instead of handing it those
         if (series.color.isSet()) l->color({series.color.r, series.color.g, series.color.b});
         if (series.marker >= 0)   l->marker(matplotMarker(series.marker));
-        if (series.markerSize > 0) l->marker_size(series.markerSize);
+        l->marker_size(((series.markerSize > 0) ? series.markerSize : 6) * s);
 
         names.push_back(series.colName(c));
     }
@@ -84,7 +101,7 @@ inline void openBarChart(const seriesPool::NamedSeries& series, std::string save
 
     if (series.color.isSet() && names.size() <= 1)
         h->face_color({series.color.r, series.color.g, series.color.b});
-    if (series.lineWidth > 0) h->line_width(series.lineWidth);
+    h->line_width(((series.lineWidth > 0) ? series.lineWidth : 0.5f) * matplotScale());
 
     matplotDecorate(series, names);
 
@@ -118,6 +135,7 @@ inline void openHeatmapChart(const seriesPool::NamedSeries& series, std::string 
     matplot::colormap(matplot::palette::viridis()); // same map the ImPlot panel pushes
 
     const auto& ax = series.heatmapAxes;
+    matplotScaleFonts();
     matplot::title(series.name);
     if (!ax.xTitle.empty()) matplot::xlabel(ax.xTitle);
     if (!ax.yTitle.empty()) matplot::ylabel(ax.yTitle);
@@ -157,11 +175,12 @@ inline void openScatterChart(const seriesPool::NamedSeries& series, std::string 
     std::vector<std::string> names;
 
     // styling shared by both layouts, scatter defaults to "o" when no marker was picked
+    const float s = matplotScale();
     auto style = [&](matplot::line_handle l) {
         l->use_y2(series.onY2);
         if (series.color.isSet()) l->color({series.color.r, series.color.g, series.color.b});
         l->marker(series.marker >= 0 ? matplotMarker(series.marker) : "o");
-        if (series.markerSize > 0) l->marker_size(series.markerSize);
+        l->marker_size(((series.markerSize > 0) ? series.markerSize : 6) * s);
     };
 
     if (series.xyBars) {
@@ -184,7 +203,6 @@ inline void openScatterChart(const seriesPool::NamedSeries& series, std::string 
     matplotDecorate(series, names);
 
     if (!saveTo.empty()) matplot::save(saveTo);
-    matplot::wait();
 }
 
 inline void openErrorBarChart(const seriesPool::NamedSeries& series, std::string saveTo = "") {
@@ -196,6 +214,8 @@ inline void openErrorBarChart(const seriesPool::NamedSeries& series, std::string
     if (series.onY2) std::cerr << "openErrorBarChart: matplot can't put error bars on y2, \"" << series.name << "\" goes on y1\n";
 
     const auto& y = series.data[0];
+    const float s = matplotScale();
+    const float lw = ((series.lineWidth > 0) ? series.lineWidth : 0.5f) * s;
     matplot::cla();
 
     if (series.errors.size() != y.size()) {
@@ -205,18 +225,18 @@ inline void openErrorBarChart(const seriesPool::NamedSeries& series, std::string
                       << " errors for " << y.size() << " points, drawing without bars\n";
         auto l = matplot::plot(y);
         if (series.color.isSet()) l->color({series.color.r, series.color.g, series.color.b});
-        if (series.lineWidth > 0) l->line_width(series.lineWidth);
+        l->line_width(lw);
     } else {
         auto e = matplot::errorbar(matplotIndexX(y.size()), y, series.errors);
         if (series.color.isSet()) e->color({series.color.r, series.color.g, series.color.b});
-        if (series.lineWidth > 0) e->line_width(series.lineWidth);
+        e->line_width(lw);
         if (series.marker >= 0)   e->marker(matplotMarker(series.marker));
+        e->marker_size(((series.markerSize > 0) ? series.markerSize : 6) * s);
     }
 
     matplotDecorate(series, {});
 
     if (!saveTo.empty()) matplot::save(saveTo);
-    matplot::wait();
 }
 
 inline void matplotShow() { matplot::show(); }
