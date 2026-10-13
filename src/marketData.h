@@ -1,37 +1,27 @@
 // I genuinely have no clue how to do this file stuff
 // so claude did (most) of it. Methods added recently are likely human written
 // writing this as of september 14th 2026, for the record
+//
+// market data wrapper over the generic csv toolkit in csv.h, this is where
+// kCSVMapping turns rows into Ticks (MarketData) and Ticks back into rows
+// (MarketDataWriter)
 
 #pragma once
 
 #include "dataConfig.h"
+#include "csv.h"
 
 #include <algorithm>
 #include <charconv>
 #include <cstdio>
 #include <cstddef>
-#include <cstring>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
-
-#ifdef _WIN32
-  #ifndef WIN32_LEAN_AND_MEAN
-    #define WIN32_LEAN_AND_MEAN
-  #endif
-  #ifndef NOMINMAX
-    #define NOMINMAX
-  #endif
-  #include <windows.h>
-#else
-  #include <fcntl.h>
-  #include <sys/mman.h>
-  #include <sys/stat.h>
-  #include <unistd.h>
-#endif
 
 /// @brief a single row from the CSV, timestamp + price as string_views into
 /// the mmapped buffer (only valid while MarketData is alive), plus a parsed
@@ -192,150 +182,6 @@ inline int formatIsoTimestamp(char* buf, std::size_t bufSize, long long nanosSin
         c.y, c.m, c.d, h, mi, s, fracNs);
 }
 
-/// @brief find first '\n' in [p, end), returns end if none found
-/// memchr on modern glibc / MSVC uses SIMD (SSE2/AVX) for the scan so
-/// this is basically free compared to looping byte-by-byte
-inline const char* findEOL(const char* p, const char* end) {
-    if (p >= end) return end;
-    const void* nl = std::memchr(p, '\n', static_cast<size_t>(end - p));
-    return nl ? static_cast<const char*>(nl) : end;
-}
-
-/// @brief grab the col-th (0-indexed) comma-separated field from a CSV row
-/// assumes no quoted fields, fine for the numeric TBBO schema
-/// @param start beginning of the row
-/// @param end   one past the last char of the row (newline or EOF)
-/// @param col   which column to extract
-inline std::string_view field(const char* start, const char* end, int col) {
-    const char* p = start;
-    for (int i = 0; i < col; ++i) {
-        if (p >= end) return {};
-        const void* c = std::memchr(p, ',', static_cast<size_t>(end - p));
-        if (!c) return {};
-        p = static_cast<const char*>(c) + 1;
-    }
-    const void* c = (p < end)
-        ? std::memchr(p, ',', static_cast<size_t>(end - p))
-        : nullptr;
-    const char* fieldEnd = c ? static_cast<const char*>(c) : end;
-    return std::string_view(p, static_cast<size_t>(fieldEnd - p));
-}
-
-/// @brief extract two fields (cols c1 and c2, c1 <= c2) in a single pass
-/// instead of calling field() twice. used by nextTick since it always
-/// needs both timestamp and price from the same row
-/// @param c1 first column index
-/// @param c2 second column index (must be >= c1)
-/// @param f1 output: view of the first field
-/// @param f2 output: view of the second field
-inline void twoFields(const char* start, const char* end, int c1, int c2,
-                      std::string_view& f1, std::string_view& f2) {
-    const char* p  = start;
-    const char* fs = start;
-    int col = 0;
-    while (p < end) {
-        if (*p == ',') {
-            if (col == c1) f1 = std::string_view(fs, static_cast<size_t>(p - fs));
-            if (col == c2) { f2 = std::string_view(fs, static_cast<size_t>(p - fs)); return; }
-            ++col;
-            fs = p + 1;
-        }
-        ++p;
-    }
-    if (col == c1) f1 = std::string_view(fs, static_cast<size_t>(p - fs));
-    if (col == c2) f2 = std::string_view(fs, static_cast<size_t>(p - fs));
-}
-
-/// @brief three-field variant of twoFields, single-pass extraction of cols
-/// c1 <= c2 <= c3, used by nextTick which needs timestamp + price + size
-inline void threeFields(const char* start, const char* end, int c1, int c2, int c3,
-                        std::string_view& f1, std::string_view& f2, std::string_view& f3) {
-    const char* p  = start;
-    const char* fs = start;
-    int col = 0;
-    while (p < end) {
-        if (*p == ',') {
-            if (col == c1) f1 = std::string_view(fs, static_cast<size_t>(p - fs));
-            if (col == c2) f2 = std::string_view(fs, static_cast<size_t>(p - fs));
-            if (col == c3) { f3 = std::string_view(fs, static_cast<size_t>(p - fs)); return; }
-            ++col;
-            fs = p + 1;
-        }
-        ++p;
-    }
-    if (col == c1) f1 = std::string_view(fs, static_cast<size_t>(p - fs));
-    if (col == c2) f2 = std::string_view(fs, static_cast<size_t>(p - fs));
-    if (col == c3) f3 = std::string_view(fs, static_cast<size_t>(p - fs));
-}
-
-/// @brief four-field variant, single-pass extraction of cols c1 <= c2 <= c3 <= c4
-inline void fourFields(const char* start, const char* end, int c1, int c2, int c3, int c4,
-                       std::string_view& f1, std::string_view& f2, std::string_view& f3, std::string_view& f4) {
-    const char* p  = start;
-    const char* fs = start;
-    int col = 0;
-    while (p < end) {
-        if (*p == ',') {
-            if (col == c1) f1 = std::string_view(fs, static_cast<size_t>(p - fs));
-            if (col == c2) f2 = std::string_view(fs, static_cast<size_t>(p - fs));
-            if (col == c3) f3 = std::string_view(fs, static_cast<size_t>(p - fs));
-            if (col == c4) { f4 = std::string_view(fs, static_cast<size_t>(p - fs)); return; }
-            ++col;
-            fs = p + 1;
-        }
-        ++p;
-    }
-    if (col == c1) f1 = std::string_view(fs, static_cast<size_t>(p - fs));
-    if (col == c2) f2 = std::string_view(fs, static_cast<size_t>(p - fs));
-    if (col == c3) f3 = std::string_view(fs, static_cast<size_t>(p - fs));
-    if (col == c4) f4 = std::string_view(fs, static_cast<size_t>(p - fs));
-}
-
-/// @brief general n-column single-pass extraction, out[i] gets the field at
-/// cols[i]. unlike the two/three/fourFields variants above it doesn't care what
-/// order cols is in (it stops at whichever index is largest, not the last one),
-/// and a negative cols[i] just leaves out[i] empty, which is what lets nextTick
-/// pass optional columns like the aggressor or resting sizes straight through
-/// @param cols n column indices, any order, negatives meaning "not configured"
-/// @param out  caller-owned array of n views, only the ones that matched get written
-inline void nFields(const char* start, const char* end, const int* cols, int n,
-                    std::string_view* out) {
-    int maxCol = -1;
-    for (int i = 0; i < n; ++i) if (cols[i] > maxCol) maxCol = cols[i];
-    if (maxCol < 0) return;
-
-    const char* p  = start;
-    const char* fs = start;
-    int col = 0;
-    while (p < end) {
-        if (*p == ',') {
-            for (int i = 0; i < n; ++i)
-                if (cols[i] == col) out[i] = std::string_view(fs, static_cast<size_t>(p - fs));
-            if (col == maxCol) return;
-            ++col;
-            fs = p + 1;
-        }
-        ++p;
-    }
-    // trailing field, no comma terminates it
-    for (int i = 0; i < n; ++i)
-        if (cols[i] == col) out[i] = std::string_view(fs, static_cast<size_t>(p - fs));
-}
-
-/// @brief parse a field into `dst`, leaving it untouched if the column wasn't
-/// configured or the row didn't have it. keeps the "0 when disabled" default
-/// that Tick's resting sizes and bid/ask prices rely on
-inline void parseOptionalFloat(std::string_view v, double& dst) {
-    if (v.empty()) return;
-    std::from_chars(v.data(), v.data() + v.size(), dst);
-}
-
-/// @brief long long counterpart of parseOptionalFloat, used for rowNumber
-inline void parseOptionalLongLong(std::string_view v, long long& dst) {
-    if (v.empty()) return;
-    std::from_chars(v.data(), v.data() + v.size(), dst);
-}
-
 /// @brief classify a raw action-column value against the seven configured
 /// aliases, shared by both nextTick/nextClose (CSV and Parquet) so the chain
 /// only lives in one place. falls back to actionNoneAlias when it matches
@@ -358,120 +204,71 @@ inline const char* classifyAction(std::string_view actionView) {
 // this file. A no-op include when AZBT_PARQUET isn't defined.
 #include "parquetMarketData.h"
 
-/// @brief streaming reader over a raw byte range, used internally by MarketData
+/// @brief csv options for market data files, the header flag comes from
+/// kCSVMapping.skipHeader so a headerless file reads its first row as data
+inline csv::Options marketDataCsvOptions() {
+    csv::Options opt;
+    opt.header = kCSVMapping.skipHeader;
+    return opt;
+}
+
+/// @brief kCSVMapping-aware reader over a raw byte range, used internally by MarketData
 class _MarketData {
 private:
-    const char* _base;
-    const char* _cur;
-    const char* _end;
-    bool _consumedHeader = false;
+    csv::Reader _in;
 
     // contract roll state
     std::string _activeSymbol;
     int _missCount = 0;
     static constexpr int _rollThreshold = 200;
 
-    std::vector<const char*> _lineIndex;
-
-    void _buildLineIndex() {
-        if (!_lineIndex.empty() || _base == _end) return;
-        const char* eol = mdDetail::findEOL(_base, _end);
-        const char* p = (eol < _end) ? eol + 1 : _end;
-        while (p < _end) {
-            _lineIndex.push_back(p);
-            eol = mdDetail::findEOL(p, _end);
-            p = (eol < _end) ? eol + 1 : _end;
-        }
-    }
-
-    void _skipHeaderOnce() {
-        if (_consumedHeader) return;
-        const char* eol = mdDetail::findEOL(_cur, _end);
-        _cur = (eol < _end) ? eol + 1 : _end;
-        _consumedHeader = true;
-    }
-
-    // advance past rows that dont match the configured symbol filter
+    // next row that passes the configured symbol filter, consumed
     // handles both exact match and rolling contract mode
-    const char* _nextMatchingLine() {
+    std::optional<csv::Row> _nextMatchingRow() {
         // an empty symbol means "read the column but don't filter on it"
-        if (kCSVMapping.symbolCol < 0 || kCSVMapping.symbol[0] == '\0') {
-            if (_cur < _end) return _cur;
-            return nullptr;
-        }
+        if (kCSVMapping.symbolCol < 0 || kCSVMapping.symbol[0] == '\0') return _in.next();
         std::string_view root(kCSVMapping.symbol);
-        while (_cur < _end) {
-            const char* line = _cur;
-            const char* eol  = mdDetail::findEOL(line, _end);
-            if (line == eol) return nullptr;
-            std::string_view sym = mdDetail::field(line, eol, kCSVMapping.symbolCol);
+        while (auto row = _in.next()) {
+            std::string_view sym = (*row)[kCSVMapping.symbolCol];
 
             if (!kCSVMapping.symbolRoll) {
                 // exact match mode
-                if (sym == root) return line;
-                _cur = (eol < _end) ? eol + 1 : _end;
+                if (sym == root) return row;
                 continue;
             }
 
             // rolling mode: match root prefix
-            if (sym.size() < root.size() || sym.substr(0, root.size()) != root) {
-                _cur = (eol < _end) ? eol + 1 : _end;
-                continue;
-            }
+            if (sym.size() < root.size() || sym.substr(0, root.size()) != root) continue;
 
             // first contract we see becomes active
             if (_activeSymbol.empty()) {
                 _activeSymbol = std::string(sym);
                 _missCount = 0;
-                return line;
+                return row;
             }
 
             // matches the active contract
             if (sym == std::string_view(_activeSymbol)) {
                 _missCount = 0;
-                return line;
+                return row;
             }
 
             // different contract, count misses and roll if the active one is gone
-            _missCount++;
-            if (_missCount >= _rollThreshold) {
+            if (++_missCount >= _rollThreshold) {
                 _activeSymbol = std::string(sym);
                 _missCount = 0;
-                return line;
+                return row;
             }
-            _cur = (eol < _end) ? eol + 1 : _end;
         }
-        return nullptr;
+        return std::nullopt;
     }
 
-public:
-    _MarketData(const char* data, std::size_t size)
-        : _base(data), _cur(data), _end(data + size) {}
-
-    // skip past one line without parsing, returns false at EOF
-    bool skipLine() {
-        _skipHeaderOnce();
-        if (_cur >= _end) return false;
-        const char* eol = mdDetail::findEOL(_cur, _end);
-        _cur = (eol < _end) ? eol + 1 : _end;
-        return true;
-    }
-
-    std::size_t byteOffset() const { return static_cast<std::size_t>(_cur - _base); }
-    void seekTo(std::size_t off) { _cur = _base + off; _consumedHeader = true; }
-
-    /// @brief next tick from the file (header skipped on first call)
-    /// @return the next tick as views into the underlying buffer, or nullopt at EOF
-    std::optional<Tick> nextTick() {
-        _skipHeaderOnce();
-        const char* line = _nextMatchingLine();
-        if (!line) return std::nullopt;
-        const char* eol = mdDetail::findEOL(line, _end);
-        _cur = (eol < _end) ? eol + 1 : _end;
-        Tick t;
-        // one pass over the row for every mapped column, the optional ones
-        // (aggressor, resting sizes, bid/ask prices, ts_event, row number)
-        // come back empty when their index is -1
+    // one pass over every mapped column of `row`, the optional ones (aggressor,
+    // resting sizes, bid/ask prices, ts_event, row number, MBP extras) stay at
+    // Tick's defaults when their index is -1. nextTick hands this straight back,
+    // nextClose uses it for the closing row's snapshot then swaps in the bar
+    // aggregates
+    static Tick _parseRow(const csv::Row& row) {
         const int cols[16] = { kCSVMapping.tsRecvCol,     kCSVMapping.priceCol,
                                kCSVMapping.aggressor,     kCSVMapping.sizeCol,
                                kCSVMapping.restingBidCol, kCSVMapping.restingAskCol,
@@ -481,25 +278,25 @@ public:
                                kCSVMapping.bidCountCol,   kCSVMapping.askCountCol,
                                kCSVMapping.instrumentCol, kCSVMapping.symbolCol };
         std::string_view f[16];
-        mdDetail::nFields(line, eol, cols, 16, f);
+        row.fields(cols, 16, f);
 
+        Tick t;
         t.tsRecv = f[0];
         t.price  = f[1];
-        std::string_view sideView   = f[2];
-        std::string_view szView     = f[3];
-        std::string_view actionView = f[10];
-        std::from_chars(szView.data(), szView.data() + szView.size(), t.size);
-        mdDetail::parseOptionalFloat(f[4], t.restingBids);
-        mdDetail::parseOptionalFloat(f[5], t.restingAsks);
-        mdDetail::parseOptionalFloat(f[6], t.bidPrice);
-        mdDetail::parseOptionalFloat(f[7], t.askPrice);
+        csv::parse(f[3],  t.size);
+        csv::parse(f[4],  t.restingBids);
+        csv::parse(f[5],  t.restingAsks);
+        csv::parse(f[6],  t.bidPrice);
+        csv::parse(f[7],  t.askPrice);
         t.tsEvent = f[8];
-        mdDetail::parseOptionalLongLong(f[9], t.rowNumber);
-        if (!f[11].empty()) std::from_chars(f[11].data(), f[11].data() + f[11].size(), t.flags);
-        mdDetail::parseOptionalFloat(f[12], t.bidCount);
-        mdDetail::parseOptionalFloat(f[13], t.askCount);
-        mdDetail::parseOptionalLongLong(f[14], t.instrumentId);
+        csv::parse(f[9],  t.rowNumber);
+        csv::parse(f[11], t.flags);
+        csv::parse(f[12], t.bidCount);
+        csv::parse(f[13], t.askCount);
+        csv::parse(f[14], t.instrumentId);
         t.symbol = f[15];
+
+        std::string_view sideView = f[2];
         if (kCSVMapping.aggressor >= 0 && sideView == kCSVMapping.buySideAggressorAlias) {
             t.side = kCSVMapping.buySideAggressorAlias;
             t.executedBuys = t.size;
@@ -509,135 +306,103 @@ public:
         } else {
             t.unknownVolume = t.size;
         }
-        
-        if (kCSVMapping.actionCol >= 0) t.action = mdDetail::classifyAction(actionView);
+
+        if (kCSVMapping.actionCol >= 0) t.action = mdDetail::classifyAction(f[10]);
         return t;
+    }
+
+public:
+    _MarketData(const char* data, std::size_t size)
+        : _in(data, size, marketDataCsvOptions()) {}
+
+    // skip past one line without parsing, returns false at EOF
+    bool skipLine() { return _in.skip(); }
+
+    std::size_t byteOffset() const { return _in.byteOffset(); }
+    void seekTo(std::size_t off) { _in.seekTo(off); }
+
+    /// @brief next tick from the file (header skipped on first call)
+    /// @return the next tick as views into the underlying buffer, or nullopt at EOF
+    std::optional<Tick> nextTick() {
+        auto row = _nextMatchingRow();
+        if (!row) return std::nullopt;
+        return _parseRow(*row);
     }
 
     /// @brief close tick of the next window covering at least `seconds`,
     /// t.size is the summed volume across every tick that fell inside the bar,
     /// split across t.executedBuys / t.executedSells / t.unknownVolume by the
-    /// aggressor column. t.side is the side of the closing tick specifically
-    /// (same row the timestamp and price come from), not the bar as a whole,
-    /// and t.restingBids / t.restingAsks / t.bidPrice / t.askPrice / t.action
-    /// are that same closing row's book, quote and action. t.open / t.high /
-    /// t.low are the first, highest and lowest price across the bar
+    /// aggressor column. everything else that describes a single row (side,
+    /// resting sizes, quote, action, ts_event, MBP extras, symbol) comes off
+    /// the closing row, same row the timestamp and price come from. t.open /
+    /// t.high / t.low are the first, highest and lowest price across the bar
     /// @return the close tick (views into the underlying buffer), or nullopt at EOF
     std::optional<Tick> nextClose(int seconds) {
-        _skipHeaderOnce();
-        const char* line = _nextMatchingLine();
-        if (!line) return std::nullopt;
-        const char* eol = mdDetail::findEOL(line, _end);
-        _cur = (eol < _end) ? eol + 1 : _end;
+        auto first = _nextMatchingRow();
+        if (!first) return std::nullopt;
 
-        std::string_view firstTs = mdDetail::field(line, eol, kCSVMapping.tsRecvCol);
-        std::string targetOwned  = mdDetail::endTimestamp(firstTs, seconds);
-        std::string_view target(targetOwned);
+        // the four columns every row in the bar needs, pulled in one pass
+        const int cols[4] = { kCSVMapping.tsRecvCol, kCSVMapping.priceCol,
+                              kCSVMapping.sizeCol,   kCSVMapping.aggressor };
 
         double barVolume = 0.0, buys = 0.0, sells = 0.0, unknown = 0.0;
         double open = 0.0, high = 0.0, low = 0.0;
         bool firstRow = true;
-        // the row's side alias, or nullptr when side classification is disabled
-        const char* rowSide = nullptr;
 
-        // parse one row's size and price and fold them into the running
-        // per-side totals and the bar's range
-        auto accumulate = [&](const char* l, const char* e) {
-            std::string_view pxView = mdDetail::field(l, e, kCSVMapping.priceCol);
-            double px = 0.0;
-            std::from_chars(pxView.data(), pxView.data() + pxView.size(), px);
+        // fold one row's price and size into the bar's range and the running
+        // per-side totals, hands back the row's timestamp
+        auto accumulate = [&](const csv::Row& row) {
+            std::string_view f[4];
+            row.fields(cols, 4, f);
+
+            double px = csv::as<double>(f[1]);
             if (firstRow) { open = high = low = px; firstRow = false; }
             else { high = std::max(high, px); low = std::min(low, px); }
 
-            std::string_view szView = mdDetail::field(l, e, kCSVMapping.sizeCol);
-            double sz = 0.0;
-            std::from_chars(szView.data(), szView.data() + szView.size(), sz);
+            double sz = csv::as<double>(f[2]);
             barVolume += sz;
-
-            rowSide = nullptr;
-            if (kCSVMapping.aggressor >= 0) {
-                std::string_view sideView = mdDetail::field(l, e, kCSVMapping.aggressor);
-                if (sideView == kCSVMapping.buySideAggressorAlias)       rowSide = kCSVMapping.buySideAggressorAlias;
-                else if (sideView == kCSVMapping.sellSideAggressorAlias) rowSide = kCSVMapping.sellSideAggressorAlias;
-            }
-            if (rowSide == kCSVMapping.buySideAggressorAlias)       buys  += sz;
-            else if (rowSide == kCSVMapping.sellSideAggressorAlias) sells += sz;
-            else                                                    unknown += sz;
+            if (kCSVMapping.aggressor >= 0 && f[3] == kCSVMapping.buySideAggressorAlias)       buys    += sz;
+            else if (kCSVMapping.aggressor >= 0 && f[3] == kCSVMapping.sellSideAggressorAlias) sells   += sz;
+            else                                                                               unknown += sz;
+            return f[0];
         };
 
-        accumulate(line, eol);
+        std::string_view firstTs = accumulate(*first);
+        std::string targetOwned  = mdDetail::endTimestamp(firstTs, seconds);
+        std::string_view target(targetOwned);
 
-        const char* lastLine = line;
-        const char* lastEol  = eol;
+        csv::Row last = *first;
         std::string_view lastTs = firstTs;
-
         while (lastTs < target) {
-            const char* nline = _nextMatchingLine();
-            if (!nline) break;
-            const char* neol = mdDetail::findEOL(nline, _end);
-            _cur = (neol < _end) ? neol + 1 : _end;
-
-            lastLine = nline;
-            lastEol  = neol;
-            lastTs   = mdDetail::field(nline, neol, kCSVMapping.tsRecvCol);
-            accumulate(nline, neol);
+            auto row = _nextMatchingRow();
+            if (!row) break;
+            last   = *row;
+            lastTs = accumulate(last);
         }
 
-        Tick t;
-        t.tsRecv = lastTs;
-        t.price  = mdDetail::field(lastLine, lastEol, kCSVMapping.priceCol);
-        t.open   = open;
-        t.high   = high;
-        t.low    = low;
-        t.size   = barVolume;
-        // rowSide is left pointing at the last row accumulate() saw, i.e. the close
-        if (rowSide) t.side = rowSide;
+        // book, quote and action are snapshots, summing them across the bar
+        // would be meaningless, so they come off the closing row like the price
+        Tick t = _parseRow(last);
+        t.open = open;
+        t.high = high;
+        t.low  = low;
+        t.size = barVolume;
         t.executedBuys  = buys;
         t.executedSells = sells;
         t.unknownVolume = unknown;
-        // resting sizes are book snapshots, summing them across the bar would be
-        // meaningless, so they come off the closing row like the price does
-        if (kCSVMapping.restingBidCol >= 0)
-            mdDetail::parseOptionalFloat(
-                mdDetail::field(lastLine, lastEol, kCSVMapping.restingBidCol), t.restingBids);
-        if (kCSVMapping.restingAskCol >= 0)
-            mdDetail::parseOptionalFloat(
-                mdDetail::field(lastLine, lastEol, kCSVMapping.restingAskCol), t.restingAsks);
-        if (kCSVMapping.bidPriceCol >= 0)
-            mdDetail::parseOptionalFloat(
-                mdDetail::field(lastLine, lastEol, kCSVMapping.bidPriceCol), t.bidPrice);
-        if (kCSVMapping.askPriceCol >= 0)
-            mdDetail::parseOptionalFloat(
-                mdDetail::field(lastLine, lastEol, kCSVMapping.askPriceCol), t.askPrice);
-        if (kCSVMapping.tsEventCol >= 0)
-            t.tsEvent = mdDetail::field(lastLine, lastEol, kCSVMapping.tsEventCol);
-        if (kCSVMapping.rowNumberCol >= 0)
-            mdDetail::parseOptionalLongLong(
-                mdDetail::field(lastLine, lastEol, kCSVMapping.rowNumberCol), t.rowNumber);
-        // action is a book-event classification, not something that sums across
-        // a bar, so like the resting/bid-ask columns it comes off the closing row
-        if (kCSVMapping.actionCol >= 0)
-            t.action = mdDetail::classifyAction(
-                mdDetail::field(lastLine, lastEol, kCSVMapping.actionCol));
         return t;
     }
 
-    void setCursor(int rowCount) {
-        _buildLineIndex();
-        _consumedHeader = true;
-        _cur = (rowCount >= 0 && static_cast<std::size_t>(rowCount) < _lineIndex.size())
-            ? _lineIndex[static_cast<std::size_t>(rowCount)] : _end;
-    }
+    void setCursor(int rowCount) { _in.seekRow(rowCount); }
 
     /// @brief true if the row currently under the cursor's symbol column
     /// exactly matches `contract` (e.g. "MNQH5"), just peeks, doesnt consume
     /// the row or move the cursor
     /// @param contract the exact contract to check for
     bool rowMatchesContract(std::string_view contract) {
-        _skipHeaderOnce();
-        if (kCSVMapping.symbolCol < 0 || _cur >= _end) return false;
-        const char* eol = mdDetail::findEOL(_cur, _end);
-        return mdDetail::field(_cur, eol, kCSVMapping.symbolCol) == contract;
+        if (kCSVMapping.symbolCol < 0) return false;
+        auto row = _in.peek();
+        return row && (*row)[kCSVMapping.symbolCol] == contract;
     }
 
     /// @brief the symbol column of the rowCount-th data row (0-indexed, header
@@ -645,17 +410,8 @@ public:
     /// @param rowCount which row to read
     std::string_view contractAt(int rowCount) {
         if (kCSVMapping.symbolCol < 0) return {};
-        const char* savedCur = _cur;
-        bool savedHeader = _consumedHeader;
-        setCursor(rowCount);
-        std::string_view sym;
-        if (_cur < _end) {
-            const char* eol = mdDetail::findEOL(_cur, _end);
-            sym = mdDetail::field(_cur, eol, kCSVMapping.symbolCol);
-        }
-        _cur = savedCur;
-        _consumedHeader = savedHeader;
-        return sym;
+        auto row = _in.rowAt(rowCount);
+        return row ? (*row)[kCSVMapping.symbolCol] : std::string_view{};
     }
 };
 
@@ -673,69 +429,11 @@ inline bool isParquetPath(const std::string& path) {
 /// valid until the next call on this MarketData instance.
 class MarketData {
 private:
-    struct RawMap {
-        const char* data = nullptr;
-        std::size_t size = 0;
-#ifdef _WIN32
-        HANDLE hFile = INVALID_HANDLE_VALUE;
-        HANDLE hMap  = nullptr;
-#else
-        int fd = -1;
-#endif
-    };
-    RawMap _map;
+    csv::MappedFile _map; // declared before _csv so it outlives the reader pointing into it
     std::unique_ptr<_MarketData> _csv;
 #ifdef AZBT_PARQUET
     std::unique_ptr<_ParquetMarketData> _pq;
 #endif
-
-    static RawMap openMap(const std::string& path) {
-        RawMap m;
-#ifdef _WIN32
-        m.hFile = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-                              OPEN_EXISTING,
-                              FILE_ATTRIBUTE_NORMAL | FILE_FLAG_SEQUENTIAL_SCAN,
-                              nullptr);
-        if (m.hFile == INVALID_HANDLE_VALUE)
-            throw std::runtime_error("MarketData: open failed: " + path);
-        LARGE_INTEGER sz;
-        if (!GetFileSizeEx(m.hFile, &sz)) {
-            CloseHandle(m.hFile);
-            throw std::runtime_error("MarketData: size query failed: " + path);
-        }
-        m.size = static_cast<std::size_t>(sz.QuadPart);
-        m.hMap = CreateFileMappingA(m.hFile, nullptr, PAGE_READONLY, 0, 0, nullptr);
-        if (!m.hMap) {
-            CloseHandle(m.hFile);
-            throw std::runtime_error("MarketData: file mapping failed: " + path);
-        }
-        void* p = MapViewOfFile(m.hMap, FILE_MAP_READ, 0, 0, 0);
-        if (!p) {
-            CloseHandle(m.hMap);
-            CloseHandle(m.hFile);
-            throw std::runtime_error("MarketData: map view failed: " + path);
-        }
-        m.data = static_cast<const char*>(p);
-#else
-        m.fd = ::open(path.c_str(), O_RDONLY);
-        if (m.fd == -1)
-            throw std::runtime_error("MarketData: open failed: " + path);
-        struct stat st;
-        if (fstat(m.fd, &st) == -1) {
-            ::close(m.fd);
-            throw std::runtime_error("MarketData: stat failed: " + path);
-        }
-        m.size = static_cast<std::size_t>(st.st_size);
-        void* p = mmap(nullptr, m.size, PROT_READ, MAP_PRIVATE, m.fd, 0);
-        if (p == MAP_FAILED) {
-            ::close(m.fd);
-            throw std::runtime_error("MarketData: mmap failed: " + path);
-        }
-        madvise(p, m.size, MADV_SEQUENTIAL);
-        m.data = static_cast<const char*>(p);
-#endif
-        return m;
-    }
 
 public:
     /// @brief opens `path`, mmapping it if it's a CSV or (given Arrow/Parquet
@@ -752,24 +450,12 @@ public:
                 "`brew install apache-arrow` and rebuild.");
 #endif
         } else {
-            _map = openMap(path);
-            _csv = std::make_unique<_MarketData>(_map.data, _map.size);
+            _map = csv::MappedFile(path);
+            _csv = std::make_unique<_MarketData>(_map.data(), _map.size());
         }
     }
 
-    ~MarketData() {
-        if (!_csv) return;
-#ifdef _WIN32
-        if (_map.data)                        UnmapViewOfFile(_map.data);
-        if (_map.hMap)                        CloseHandle(_map.hMap);
-        if (_map.hFile != INVALID_HANDLE_VALUE) CloseHandle(_map.hFile);
-#else
-        if (_map.data) munmap(const_cast<char*>(_map.data), _map.size);
-        if (_map.fd != -1) ::close(_map.fd);
-#endif
-    }
-
-    // copying would double-free the mapping
+    // the reader points into _map, moving or copying would leave it dangling
     MarketData(const MarketData&)            = delete;
     MarketData& operator=(const MarketData&) = delete;
 
@@ -823,7 +509,7 @@ public:
         _csv->setCursor(rowCount);
     }
 
-    /// @brief true if the row under the cursor matches `contract` 
+    /// @brief true if the row under the cursor matches `contract`
     bool rowMatchesContract(std::string_view contract) {
 #ifdef AZBT_PARQUET
         if (_pq) return _pq->rowMatchesContract(contract);
@@ -839,4 +525,138 @@ public:
 #endif
         return _csv->contractAt(rowCount);
     }
+};
+
+/// @brief writes Ticks out as CSV in the kCSVMapping layout, so the file reads
+/// straight back through MarketData with the same config. handy for saving a
+/// filtered or resampled slice of a big file, e.g. dumping 1 minute bars:
+///
+///   MarketData md(kCSVMapping.path);
+///   MarketDataWriter out("bars_1m.csv");
+///   while (auto bar = md.nextClose(60)) out.write(*bar);
+///
+/// every mapped column gets written at its configured index, unmapped columns
+/// in between are left blank. a header row goes out first when
+/// kCSVMapping.skipHeader is on (and the file isn't being appended to), since
+/// the reader would eat the first data row otherwise
+///
+/// bars from nextClose write their summed size and closing row snapshot,
+/// open/high/low and the buy/sell split have no column in the mapping so they
+/// dont survive the trip. a tick with no symbol (Parquet doesn't fill it) gets
+/// kCSVMapping.symbol so the symbol filter still matches on the way back in
+class MarketDataWriter {
+private:
+    enum class Slot : unsigned char {
+        None, TsRecv, TsEvent, Price, Size, Side, RestingBid, RestingAsk,
+        BidPrice, AskPrice, RowNumber, Action, Flags, BidCount, AskCount,
+        Instrument, Symbol
+    };
+
+    csv::Writer _out;
+    std::vector<Slot> _layout; // what goes in each column, index = column
+    bool _wroteHeader = false;
+
+    static std::vector<Slot> _buildLayout() {
+        const std::pair<int, Slot> mapped[] = {
+            {kCSVMapping.tsRecvCol,     Slot::TsRecv},
+            {kCSVMapping.tsEventCol,    Slot::TsEvent},
+            {kCSVMapping.priceCol,      Slot::Price},
+            {kCSVMapping.sizeCol,       Slot::Size},
+            {kCSVMapping.aggressor,     Slot::Side},
+            {kCSVMapping.restingBidCol, Slot::RestingBid},
+            {kCSVMapping.restingAskCol, Slot::RestingAsk},
+            {kCSVMapping.bidPriceCol,   Slot::BidPrice},
+            {kCSVMapping.askPriceCol,   Slot::AskPrice},
+            {kCSVMapping.rowNumberCol,  Slot::RowNumber},
+            {kCSVMapping.actionCol,     Slot::Action},
+            {kCSVMapping.flagsCol,      Slot::Flags},
+            {kCSVMapping.bidCountCol,   Slot::BidCount},
+            {kCSVMapping.askCountCol,   Slot::AskCount},
+            {kCSVMapping.instrumentCol, Slot::Instrument},
+            {kCSVMapping.symbolCol,     Slot::Symbol},
+        };
+        int width = 0;
+        for (const auto& m : mapped) width = std::max(width, m.first + 1);
+        std::vector<Slot> layout(static_cast<std::size_t>(width), Slot::None);
+        for (const auto& m : mapped)
+            if (m.first >= 0) layout[static_cast<std::size_t>(m.first)] = m.second;
+        return layout;
+    }
+
+    // Databento's names where there is one
+    static const char* _name(Slot s) {
+        switch (s) {
+            case Slot::TsRecv:     return "ts_recv";
+            case Slot::TsEvent:    return "ts_event";
+            case Slot::Price:      return "price";
+            case Slot::Size:       return "size";
+            case Slot::Side:       return "side";
+            case Slot::RestingBid: return "bid_sz_00";
+            case Slot::RestingAsk: return "ask_sz_00";
+            case Slot::BidPrice:   return "bid_px_00";
+            case Slot::AskPrice:   return "ask_px_00";
+            case Slot::RowNumber:  return "sequence";
+            case Slot::Action:     return "action";
+            case Slot::Flags:      return "flags";
+            case Slot::BidCount:   return "bid_ct_00";
+            case Slot::AskCount:   return "ask_ct_00";
+            case Slot::Instrument: return "instrument_id";
+            case Slot::Symbol:     return "symbol";
+            case Slot::None:       break;
+        }
+        return "";
+    }
+
+public:
+    /// @param path   where to write
+    /// @param append add to the end of an existing file instead of truncating
+    ///               it, no header gets written in that case
+    explicit MarketDataWriter(const std::string& path, bool append = false)
+        : _out(path, [&] { csv::WriteOptions o; o.append = append; return o; }()),
+          _layout(_buildLayout()) {
+        if (kCSVMapping.skipHeader && !append) {
+            for (Slot s : _layout) _out.field(_name(s));
+            _out.endRow();
+            _wroteHeader = true;
+        }
+    }
+
+    /// @brief write one tick (or bar) as a row
+    void write(const Tick& t) {
+        for (Slot s : _layout) {
+            switch (s) {
+                case Slot::TsRecv:     _out.field(t.tsRecv);       break;
+                case Slot::TsEvent:    _out.field(t.tsEvent);      break;
+                case Slot::Price:      _out.field(t.price);        break;
+                case Slot::Size:       _out.field(t.size);         break;
+                case Slot::Side:       _out.field(t.side);         break;
+                case Slot::RestingBid: _out.field(t.restingBids);  break;
+                case Slot::RestingAsk: _out.field(t.restingAsks);  break;
+                case Slot::BidPrice:   _out.field(t.bidPrice);     break;
+                case Slot::AskPrice:   _out.field(t.askPrice);     break;
+                case Slot::RowNumber:  _out.field(t.rowNumber);    break;
+                case Slot::Action:     _out.field(t.action);       break;
+                case Slot::Flags:      _out.field(t.flags);        break;
+                case Slot::BidCount:   _out.field(t.bidCount);     break;
+                case Slot::AskCount:   _out.field(t.askCount);     break;
+                case Slot::Instrument: _out.field(t.instrumentId); break;
+                case Slot::Symbol:
+                    _out.field(t.symbol.empty() ? std::string_view(kCSVMapping.symbol) : t.symbol);
+                    break;
+                case Slot::None:       _out.field("");             break;
+            }
+        }
+        _out.endRow();
+    }
+
+    /// @brief write every tick in [begin, end)
+    template <typename It>
+    void write(It begin, It end) {
+        for (; begin != end; ++begin) write(*begin);
+    }
+
+    void flush() { _out.flush(); }
+    void close() { _out.close(); }
+    /// @brief data rows written so far, header not counted
+    std::size_t rowsWritten() const { return _out.rowsWritten() - (_wroteHeader ? 1 : 0); }
 };

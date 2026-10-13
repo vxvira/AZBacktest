@@ -144,3 +144,33 @@ dayLength   = 2
 
 Note: I realize the vibecoded system for registering a column is overly complex, after doing it myself for `action`.   
 I will eventually write a guide and simplifiy the system. 
+
+## CSV toolkit
+
+`src/csv.h` is a standalone CSV reader/writer with no dependency on `kCSVMapping`, so you can use it for any CSV. `MarketData` is built on top of it.
+
+```cpp
+#include "src/csv.h"
+
+// reading, mmapped and zero copy, rows are views into the file
+csv::FileReader in("trades.csv");            // csv::Options for delimiter, header, quoted fields
+int px = in.column("price");
+while (auto row = in.next()) total += row->get<double>(px);
+
+// writing, quotes text only when it needs it
+csv::Writer out("equity.csv");               // csv::WriteOptions for delimiter, append, float precision
+out.header({"ts", "equity"});
+out.row(ts, equity);
+
+// whole columns in one call
+csv::writeColumns("equity.csv", {"ts", "equity"}, tsVec, equityVec);
+auto equity = csv::readColumn<double>("equity.csv", "equity");
+```
+
+`MarketDataWriter` goes the other direction from `MarketData`. It writes `Tick`s out in your `kCSVMapping` layout, so the file reads straight back in with the same config. One use is saving resampled bars:
+
+```cpp
+MarketData md(kCSVMapping.path);
+MarketDataWriter out("bars_1m.csv");
+while (auto bar = md.nextClose(60)) out.write(*bar);
+```
