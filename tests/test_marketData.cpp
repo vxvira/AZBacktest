@@ -1,4 +1,5 @@
-// Unit tests for the CSV reader and the mdDetail parsing helpers behind it.
+// Unit tests for the market data reader and the mdDetail date helpers behind it.
+// the generic row splitting it sits on is covered by test_csv.cpp
 
 #include "tests/testFramework.h"
 #include "tests/fakeData.h"
@@ -7,101 +8,6 @@
 
 using azt::TempCsv;
 using azt::useFixtureMapping;
-
-// ---------------------------------------------------------------- field/nFields
-
-TEST(fieldExtractsColumnsByIndex) {
-    const char* row = "a,bb,ccc,dddd";
-    const char* end = row + std::strlen(row);
-    CHECK_EQ(mdDetail::field(row, end, 0), "a");
-    CHECK_EQ(mdDetail::field(row, end, 1), "bb");
-    CHECK_EQ(mdDetail::field(row, end, 2), "ccc");
-    CHECK_EQ(mdDetail::field(row, end, 3), "dddd"); // last field, no trailing comma
-}
-
-TEST(fieldReturnsEmptyPastEndOfRow) {
-    const char* row = "a,b";
-    const char* end = row + std::strlen(row);
-    CHECK_EQ(mdDetail::field(row, end, 5), "");
-}
-
-TEST(nFieldsExtractsEveryRequestedColumn) {
-    const char* row = "a,bb,ccc,dddd,e";
-    const char* end = row + std::strlen(row);
-    const int cols[3] = {0, 2, 4};
-    std::string_view f[3];
-    mdDetail::nFields(row, end, cols, 3, f);
-    CHECK_EQ(f[0], "a");
-    CHECK_EQ(f[1], "ccc");
-    CHECK_EQ(f[2], "e");
-}
-
-// the two/three/fourFields helpers bail out on their LAST index, so they only
-// work when the config happens to list columns in ascending order. nFields
-// stops at whichever index is largest instead, which is what lets nextTick
-// pass an arbitrary column mapping straight through
-TEST(nFieldsHandlesUnsortedColumnIndices) {
-    const char* row = "a,bb,ccc,dddd,e";
-    const char* end = row + std::strlen(row);
-    const int cols[4] = {3, 0, 4, 1};
-    std::string_view f[4];
-    mdDetail::nFields(row, end, cols, 4, f);
-    CHECK_EQ(f[0], "dddd");
-    CHECK_EQ(f[1], "a");
-    CHECK_EQ(f[2], "e");
-    CHECK_EQ(f[3], "bb");
-}
-
-// -1 means the column is not configured, it has to come back empty rather than
-// matching column 0 or walking off the row
-TEST(nFieldsLeavesNegativeColumnsEmpty) {
-    const char* row = "a,bb,ccc";
-    const char* end = row + std::strlen(row);
-    const int cols[3] = {-1, 1, -1};
-    std::string_view f[3];
-    mdDetail::nFields(row, end, cols, 3, f);
-    CHECK_EQ(f[0], "");
-    CHECK_EQ(f[1], "bb");
-    CHECK_EQ(f[2], "");
-}
-
-TEST(nFieldsAllNegativeTouchesNothing) {
-    const char* row = "a,bb,ccc";
-    const char* end = row + std::strlen(row);
-    const int cols[2] = {-1, -1};
-    std::string_view f[2] = {"sentinel", "sentinel"};
-    mdDetail::nFields(row, end, cols, 2, f);
-    CHECK_EQ(f[0], "sentinel");
-    CHECK_EQ(f[1], "sentinel");
-}
-
-TEST(nFieldsRepeatedIndexFillsEverySlot) {
-    const char* row = "a,bb,ccc";
-    const char* end = row + std::strlen(row);
-    const int cols[2] = {1, 1};
-    std::string_view f[2];
-    mdDetail::nFields(row, end, cols, 2, f);
-    CHECK_EQ(f[0], "bb");
-    CHECK_EQ(f[1], "bb");
-}
-
-TEST(nFieldsShortRowLeavesMissingColumnsEmpty) {
-    const char* row = "a,bb";
-    const char* end = row + std::strlen(row);
-    const int cols[2] = {0, 6};
-    std::string_view f[2];
-    mdDetail::nFields(row, end, cols, 2, f);
-    CHECK_EQ(f[0], "a");
-    CHECK_EQ(f[1], "");
-}
-
-TEST(parseOptionalFloatLeavesDestinationAloneWhenEmpty) {
-    double v = 7.0;
-    mdDetail::parseOptionalFloat("", v);
-    CHECK_F(v, 7.0);
-    mdDetail::parseOptionalFloat("42", v);
-    CHECK_F(v, 42.0);
-}
 
 // ---------------------------------------------------------------- date helpers
 

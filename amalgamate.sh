@@ -99,6 +99,7 @@ FILES=(
     # src
     "$SCRIPT_DIR/src/tomlParser.h"
     "$SCRIPT_DIR/dataConfig.h"
+    "$SCRIPT_DIR/src/csv.h"
     "$SCRIPT_DIR/src/marketData.h"
     "$SCRIPT_DIR/src/findEOF.h"
     "$SCRIPT_DIR/src/backtestApi/dataManagement/data.h"

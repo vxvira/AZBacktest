@@ -37,6 +37,38 @@ public:
     const std::string& path() const { return _path; }
 };
 
+/// @brief reserves a uniquely named scratch path without creating anything,
+/// for tests that write a file themselves. removed on destruction if it exists
+class TempPath {
+private:
+    std::string _path;
+
+public:
+    TempPath() {
+        static int counter = 0;
+        long long stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        _path = ".azt_test_out_" + std::to_string(stamp) + "_" + std::to_string(counter++) + ".csv";
+    }
+    ~TempPath() { std::remove(_path.c_str()); }
+
+    TempPath(const TempPath&)            = delete;
+    TempPath& operator=(const TempPath&) = delete;
+
+    const std::string& path() const { return _path; }
+};
+
+/// @brief whole file as a string, for checking exactly what a writer produced
+inline std::string slurp(const std::string& path) {
+    std::string out;
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    if (!f) return out;
+    char buf[4096];
+    std::size_t n;
+    while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
+    std::fclose(f);
+    return out;
+}
+
 // Canonical fixture layout shared by these tests:
 //
 //   col 0  ts      ISO-8601, Databento style
@@ -50,8 +82,8 @@ public:
 //   col 8  askpx   best ask price
 //   col 9  action  A/C/M/T/F/R = Add/Cancel/Modify/Trade/Fill/Clear, anything else None
 //
-// Note the header row: _MarketData::_skipHeaderOnce() always drops the first
-// line regardless of the skipHeader config flag, so every fixture needs one.
+// Note the header row: useFixtureMapping() turns skipHeader on, so the reader
+// drops the first line of every fixture and each one needs a header.
 inline constexpr const char* kFixtureHeader = "ts,symbol,price,size,side,bidsz,asksz,bidpx,askpx,action\n";
 
 /// @brief point the global kCSVMapping at the layout above. Call it at the top
