@@ -140,6 +140,19 @@ monthOffset = 5
 monthLength = 2
 dayOffset   = 8
 dayLength   = 2
+
+# matplot++ chart styling (openLineChart etc.), colours/widths/markers are set
+# per series instead. fontSize is at a 560x420 figure and scales with the real
+# one. any key left out keeps matplot's default
+[matplot]
+font            = "Helvetica"
+fontSize        = 10.0
+fontWeight      = "normal"   # normal / bold
+titleFontScale  = 1.1        # title size as a multiple of fontSize
+titleFontWeight = "bold"
+grid            = false
+minorGrid       = false
+box             = true
 ```
 
 Note: I realize the vibecoded system for registering a column is overly complex, after doing it myself for `action`.   

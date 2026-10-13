@@ -3,6 +3,7 @@
 #pragma once
 
 #include "tooling/seriesPool.h"
+#include "../../dataConfig.h" // kMatplotConfig
 
 #include <vector>
 #include <string>
@@ -24,12 +25,24 @@ inline float matplotScale() {
     return std::max(0.25f, std::min(f->width() / 560.f, f->height() / 420.f));
 }
 
-// fonts follow the figure too, 10 is matplot's default for both
+// fonts follow the figure too, the base size and the rest of the axes styling come from [matplot]
 inline void matplotScaleFonts() {
+    const auto& cfg = kMatplotConfig;
     const float s = matplotScale();
-    matplot::gcf()->font_size(10.f * s);
-    matplot::gca()->font_size(10.f * s);
+    auto f  = matplot::gcf();
+    auto ax = matplot::gca();
+    f->font(cfg.font);
+    f->font_size(cfg.fontSize * s);
+    ax->font(cfg.font);
+    ax->font_size(cfg.fontSize * s);
+    ax->font_weight(cfg.fontWeight);
+    ax->title_font_size_multiplier(cfg.titleFontScale);
+    ax->title_font_weight(cfg.titleFontWeight);
+    ax->grid(cfg.grid);
+    ax->minor_grid(cfg.minorGrid);
+    ax->box(cfg.box);
 }
+
 
 // title, axis labels and legend, shared by every chart kind
 inline void matplotDecorate(const seriesPool::NamedSeries& series, const std::vector<std::string>& names) {

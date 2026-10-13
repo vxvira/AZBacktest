@@ -118,6 +118,22 @@ namespace cfgDetail {
     inline bool loaded = false;
 }
 
+// matplot++ figure styling, the [matplot] section of config.toml. per-series styling
+// (colour, widths, markers) stays on NamedSeries. fontSize is at matplot's 560x420
+// reference figure and gets scaled with the figure like everything else
+struct MatplotConfig {
+    std::string font            = "Helvetica";
+    float       fontSize        = 10.f;
+    std::string fontWeight      = "normal";
+    float       titleFontScale  = 1.1f;   // title size as a multiple of fontSize
+    std::string titleFontWeight = "bold";
+    bool        grid            = false;
+    bool        minorGrid       = false;
+    bool        box             = true;
+};
+
+inline MatplotConfig kMatplotConfig;
+
 inline CSVMapping kCSVMapping{
     0, 0, 0,
     "",                                     // path (empty until loadConfig)
@@ -210,6 +226,18 @@ monthOffset = 5
 monthLength = 2
 dayOffset   = 8
 dayLength   = 2
+
+# matplot++ chart styling (openLineChart etc.), colours/widths/markers are set
+# per series instead. fontSize is at a 560x420 figure and scales with the real one
+[matplot]
+font            = "Helvetica"
+fontSize        = 10.0
+fontWeight      = "normal"   # normal / bold
+titleFontScale  = 1.1        # title size as a multiple of fontSize
+titleFontWeight = "bold"
+grid            = false
+minorGrid       = false
+box             = true
 )";
 }
 
@@ -290,4 +318,16 @@ inline void loadConfig(const char* tomlPath = "config.toml") {
     kCSVMapping.commision  = toml::getFloat(cfg, "", "commission", 0.f);
     kCSVMapping.spread     = toml::getFloat(cfg, "", "spread", 0.f);
     kCSVMapping.timingCost = toml::getFloat(cfg, "", "timingCost", 0.f);
+
+    // missing keys (or a config from before [matplot] existed) keep matplot's defaults
+    auto& mp = kMatplotConfig;
+    const MatplotConfig def;
+    mp.font            = toml::getString(cfg, "matplot", "font", def.font);
+    mp.fontSize        = toml::getFloat(cfg, "matplot", "fontSize", def.fontSize);
+    mp.fontWeight      = toml::getString(cfg, "matplot", "fontWeight", def.fontWeight);
+    mp.titleFontScale  = toml::getFloat(cfg, "matplot", "titleFontScale", def.titleFontScale);
+    mp.titleFontWeight = toml::getString(cfg, "matplot", "titleFontWeight", def.titleFontWeight);
+    mp.grid            = toml::getBool(cfg, "matplot", "grid", def.grid);
+    mp.minorGrid       = toml::getBool(cfg, "matplot", "minorGrid", def.minorGrid);
+    mp.box             = toml::getBool(cfg, "matplot", "box", def.box);
 }
