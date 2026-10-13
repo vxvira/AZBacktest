@@ -53,6 +53,30 @@ inline Series buildXYChild(seriesPool::NamedSeries& s, bool onY2) {
     return c;
 }
 
+/// @brief re-copy data into every panel child that came from the pool, children
+/// hold their own copy so a reload of the pool doesn't reach them by itself.
+/// style and axis choices on the child stay as the user left them
+inline void refreshFromPool() {
+    for (auto& p : panels) {
+        for (auto& c : p.children) {
+            if (c.sourceSeries.empty()) continue;
+            auto* s = seriesPool::findSeries(c.sourceSeries);
+            if (!s) continue;
+            if (c.sourceXY) {
+                if (s->cols() < 2) continue;
+                c.xs = s->data[0];
+                c.data = s->data[1];
+            } else {
+                if (c.sourceCol < 0 || c.sourceCol >= s->cols()) continue;
+                c.data = s->data[c.sourceCol];
+                c.errors = s->errors;
+                c.heatmapRows = s->heatmapRows;
+                c.heatmapCols = s->heatmapCols;
+            }
+        }
+    }
+}
+
 /// @brief place one tick per heatmap cell centre along `axis`
 ///
 /// PlotHeatmap draws into the unit square, so cell i of `count` is centred at

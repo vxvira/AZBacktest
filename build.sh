@@ -97,7 +97,8 @@ if [[ $TESTS -eq 1 ]]; then
 
         # set -e is on, so guard the compile explicitly to report which suite
         # broke instead of dying with a bare g++ error
-        if ! g++ -std=c++17 -I"$PROJECT_ROOT" -DAZT_SUITE_NAME="\"$suite\"" \
+        # imgui is only there for headers, seriesPool -> skinVars wants ImVec4
+        if ! g++ -std=c++17 -I"$PROJECT_ROOT" -I"$PROJECT_ROOT/vendor/imgui" -DAZT_SUITE_NAME="\"$suite\"" \
                  "$tf" -o "$exe"; then
             echo "  BUILD FAILED  $suite"
             echo ""

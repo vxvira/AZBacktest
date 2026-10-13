@@ -111,6 +111,17 @@ void showConsole(const char* title, void (skin)()) {
         windowManagement::snapResizingWindow();
         windowManagement::clampWindowsToWorkArea();
 
+        // csv reload, F5 works in tiling mode too where there's no menu bar.
+        // transforms re-run before the panel refresh so their outputs land too
+        if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) seriesPool::csvReloadRequested = true;
+        if (seriesPool::csvReloadRequested) {
+            seriesPool::csvReloadRequested = false;
+            seriesPool::reloadCsvSeries();
+            transformManagement::restorePublished();
+            transformManagement::restorePublishedVariables();
+            panelManagement::refreshFromPool();
+        }
+
         if (tiling::enabled) {
             std::vector<std::string> keys;
             for (auto& p : panelManagement::panels)         keys.push_back("panel_" + p.id);
@@ -141,6 +152,7 @@ void showConsole(const char* title, void (skin)()) {
                 transformManagement::newVariable(
                     std::to_string(transformManagement::nextVariableId()));
             }
+            if (ImGui::MenuItem("Reload CSVs", "F5")) seriesPool::csvReloadRequested = true;
 
             ImGui::EndMainMenuBar();
         }

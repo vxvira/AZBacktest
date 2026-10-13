@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "../../skins/skinVars.h" // skins::baseColor
+#include "../../csv.h"
 
 #include <string>
 
@@ -82,6 +83,13 @@ struct NamedSeries {
     float fillAlpha = -1.0;                     ///< bar fill opacity 0..1, <0 = renderer default (imgui only, gnuplot drops it)
     std::string xLabel;                         ///< x axis title for whatever plot this series lands in
     std::string yLabel;                         ///< y axis title, goes on y2 instead when onY2
+    std::string csvPath;                        ///< backing csv, empty = not backed, see csvFile()
+
+    /// @brief back this series with a csv, chain it off any add*, e.g.
+    /// addLine("pnl", v).csvFile("pnl.csv"). with data the csv gets (over)written,
+    /// with no data it gets read instead so a console can start empty and pick up
+    /// whatever a separate run wrote. either way the console re-reads it on reload
+    NamedSeries& csvFile(std::string path);
 
     int cols() const { return (int)data.size(); }       ///< number of columns (1 for a simple series)
     int rows() const { return data.empty() ? 0 : (int)data[0].size(); } ///< number of data points per column
@@ -281,5 +289,138 @@ inline void initSeriesPool(std::vector<std::vector<double>> data,
         pool.push_back({std::move(n), {std::move(data[i])}, {}, t, resolveColor({})});
     }
 }
+
+///@name CSV backing
+///@{
+
+/// @brief flip to true and the console re-reads every csv backed series at the
+/// top of its next frame, then flips it back. the console's Reload CSVs menu
+/// item and F5 both just set this
+inline bool csvReloadRequested = false;
+
+/// @brief dump a series to its csvPath with a header row, one csv column per
+/// data column. columns of different lengths pad with blank cells. heatmaps go
+/// out as their rows x cols grid and error bars as value,error so the file is
+/// readable on its own
+/// @throws std::runtime_error if the file can't be opened
+inline void writeCsv(const NamedSeries& s) {
+    csv::Writer w(s.csvPath);
+    if (s.type == 2) {
+        const std::vector<double>* flat = s.data.empty() ? nullptr : &s.data[0];
+        for (int c = 0; c < s.heatmapCols; ++c) w.field(c);
+        w.endRow();
+        for (int r = 0; r < s.heatmapRows; ++r) {
+            for (int c = 0; c < s.heatmapCols; ++c) {
+                size_t i = (size_t)r * s.heatmapCols + c;
+                w.field(flat && i < flat->size() ? std::optional<double>((*flat)[i]) : std::nullopt);
+            }
+            w.endRow();
+        }
+        return;
+    }
+
+    std::vector<const std::vector<double>*> cols;
+    for (auto& c : s.data) cols.push_back(&c);
+    if (s.type == 4) cols.push_back(&s.errors);
+
+    for (int c = 0; c < s.cols(); ++c) {
+        if (s.xyBars)                                  w.field(c == 0 ? "x" : "y");
+        else if (s.cols() == 1 && s.columnNames.empty()) w.field(s.name);
+        else                                           w.field(s.colName(c));
+    }
+    if (s.type == 4) w.field("error");
+    w.endRow();
+
+    size_t rows = 0;
+    for (auto* c : cols) rows = std::max(rows, c->size());
+    for (size_t r = 0; r < rows; ++r) {
+        for (auto* c : cols) w.field(r < c->size() ? std::optional<double>((*c)[r]) : std::nullopt);
+        w.endRow();
+    }
+}
+
+/// @brief replace a series' data with whatever is in its csvPath, the reverse
+/// of writeCsv. blank or unparseable cells get skipped so ragged columns come
+/// back at their own lengths. style, colour etc are left alone
+/// @return false (series untouched) if the file is missing or unreadable
+inline bool readCsv(NamedSeries& s) {
+    std::vector<std::vector<double>> cols;
+    std::vector<std::string> names;
+    int lines = 0;
+    try {
+        csv::Options opt;
+        opt.quoted = true;
+        csv::FileReader in(s.csvPath, opt);
+        csv::Row h = in.header();
+        for (int c = 0; c < h.size(); ++c) names.push_back(h.text(c));
+        cols.resize(names.size());
+        while (auto row = in.next()) {
+            if (row->empty()) continue;
+            ++lines;
+            for (int c = 0; c < (int)cols.size(); ++c) {
+                double v;
+                if (csv::parse((*row)[c], v)) cols[c].push_back(v);
+            }
+        }
+    } catch (const std::exception& e) {
+        fprintf(stderr, "seriesPool: couldn't read %s for \"%s\": %s\n",
+                s.csvPath.c_str(), s.name.c_str(), e.what());
+        return false;
+    }
+
+    if (s.type == 2) {
+        // grid back to flat row-major, the file decides the shape
+        std::vector<double> flat;
+        for (int r = 0; r < lines; ++r)
+            for (auto& c : cols) flat.push_back(r < (int)c.size() ? c[r] : 0.0);
+        s.heatmapRows = lines;
+        s.heatmapCols = (int)cols.size();
+        s.data.assign(1, std::move(flat));
+        return true;
+    }
+    if (s.type == 4) {
+        s.errors = cols.size() > 1 ? std::move(cols[1]) : std::vector<double>{};
+        cols.resize(cols.empty() ? 0 : 1);
+    } else if (cols.size() > 1 && !s.xyBars) {
+        s.columnNames = std::move(names);
+    }
+    // an xy series always needs its x and y columns, even out of an empty file
+    if (s.xyBars) cols.resize(2);
+    if (cols.empty()) cols.resize(1);
+    s.data = std::move(cols);
+    return true;
+}
+
+inline NamedSeries& NamedSeries::csvFile(std::string path) {
+    csvPath = std::move(path);
+    bool hasData = false;
+    for (auto& c : data) hasData = hasData || !c.empty();
+    if (!hasData) {
+        // nothing written yet is the normal case for a console started empty,
+        // stay quiet and let the first reload pick it up
+        if (FILE* f = std::fopen(csvPath.c_str(), "rb")) {
+            std::fclose(f);
+            readCsv(*this);
+        }
+        return *this;
+    }
+    try {
+        writeCsv(*this);
+    } catch (const std::exception& e) {
+        fprintf(stderr, "seriesPool: couldn't write \"%s\": %s\n", name.c_str(), e.what());
+    }
+    return *this;
+}
+
+/// @brief re-read every csv backed series in the pool
+/// @return how many were refreshed
+inline int reloadCsvSeries() {
+    int n = 0;
+    for (auto& s : pool)
+        if (!s.csvPath.empty() && readCsv(s)) ++n;
+    return n;
+}
+
+///@}
 
 } // namespace seriesPool
