@@ -48,6 +48,12 @@ struct DataWindow {
 
     /// [extra] columns from config.toml, extraNames[k] is the name of extras[k] and extras[k][i] belongs
     /// to prices[i] like every other vector here. NaN where a row had no usable value
+    /// set by requestDataWindowBy / requestDataWindowNanos. spanDone is false while more rows of the same
+    /// span follow in the next call (a chunked return) and true on the span's last window, spanKey is the
+    /// key every row of the span mapped to. a plain requestDataWindow leaves them at true / 0
+    bool spanDone = true;
+    long long spanKey = 0;
+
     std::vector<std::string> extraNames;
     std::vector<std::vector<double>> extras;
 

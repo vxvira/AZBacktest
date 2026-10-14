@@ -61,6 +61,27 @@ No `main()` needed, `testFramework.h` supplies one. Assertions are `CHECK`, `CHE
 
 Fixtures are CSV, so the Parquet backend isn't covered by these.
 
+## Windows by time span
+
+`requestDataWindow(md, n)` returns the next `n` rows. To get "one day of data" without tracking the clock yourself, ask for a span instead:
+
+```cpp
+const long long kDay = 86'400LL * 1'000'000'000LL;   // spans are in nanoseconds
+for (;;) {
+    // one UTC day per window, 5 minute bars, at most 5000 bars in memory at a time
+    DataWindow w = data.requestDataWindowNanos(md, kDay, 300, 5000);
+    if (w.prices.empty()) break;                      // end of data
+    // ... process w ...
+    if (w.spanDone) { /* that was the last window of the day */ }
+}
+```
+
+- `requestDataWindowNanos(md, spanNanos, timeframe, maxRows, offsetNanos)` cuts windows on a clock-anchored grid, `[k * span + offset, (k + 1) * span + offset)`. A gap in the data just skips the empty spans.
+- `requestDataWindowBy(md, key, timeframe, maxRows)` is the general form: `key` maps a row's ts_recv in epoch nanoseconds to any id and the window ends where the id changes. Use it for things a fixed length can't express, e.g. New York days across daylight saving.
+- `maxRows` caps one returned window, so a long span comes back in chunks instead of sitting in memory whole. `spanDone` is `false` on every chunk of a span but the last, and the next call carries on in the same span. `0` means no cap.
+- `timeframe` works as in `requestDataWindow`: `0` is raw ticks, `> 0` is bars. A bar belongs to the window of its closing row.
+- An empty window always and only means end of data.
+
 ## Configuration
 
 Edit `config.toml` to point at your data file (CSV or Parquet, see below) and map column indices.

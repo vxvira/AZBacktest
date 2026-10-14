@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <algorithm>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -35,6 +36,82 @@ private:
 
     // Data processing
     int processedBars = 0;
+
+private:
+    // size every parallel vector of `out` for `n` rows, plus one vector per [extra] column
+    static void _reserve(DataWindow& out, std::size_t n) {
+        out.prices.reserve(n);
+        out.opens.reserve(n);
+        out.highs.reserve(n);
+        out.lows.reserve(n);
+        out.volumes.reserve(n);
+        out.executedSells.reserve(n);
+        out.executedBuys.reserve(n);
+        out.deltas.reserve(n);
+        out.restingBids.reserve(n);
+        out.restingAsks.reserve(n);
+        out.bidPrices.reserve(n);
+        out.askPrices.reserve(n);
+        out.tsRecv.reserve(n);
+        out.tsEvent.reserve(n);
+        out.tsEventNanos.reserve(n);
+        out.rowNumbers.reserve(n);
+        out.action.reserve(n);
+        out.side.reserve(n);
+
+        // [extra] columns: one parallel vector per name, filled from each tick / bar
+        const auto& extraCols = kCSVMapping.extras;
+        out.extraNames.reserve(extraCols.size());
+        out.extras.resize(extraCols.size());
+        for (std::size_t k = 0; k < extraCols.size(); ++k) {
+            out.extraNames.push_back(extraCols[k].name);
+            out.extras[k].reserve(n);
+        }
+    }
+
+    // push one tick (isBar = false) or one nextClose bar (isBar = true) onto every vector of `out`
+    void _append(DataWindow& out, const Tick& t, bool isBar, void (*whenUnknown)()) {
+        double px = 0.0;
+        std::from_chars(t.price.data(), t.price.data() + t.price.size(), px);
+        out.prices.push_back(px);
+        // a tick has no range, open / high / low are just its price
+        out.opens.push_back(isBar ? t.open : px);
+        out.highs.push_back(isBar ? t.high : px);
+        out.lows.push_back(isBar ? t.low : px);
+        out.deltas.push_back(t.executedBuys - t.executedSells);
+        out.volumes.push_back(t.size);
+        out.tsRecv.push_back(mdDetail::tsToEpochSeconds(t.tsRecv));
+        out.tsEvent.push_back(t.tsEvent.empty() ? 0 : mdDetail::tsToEpochSeconds(t.tsEvent));
+        out.tsEventNanos.push_back(t.tsEvent.empty() ? 0 : mdDetail::tsToEpochNanos(t.tsEvent));
+        out.rowNumbers.push_back(t.rowNumber);
+
+        // aggressor split, pushed unconditionally so these stay index-parallel with prices/volumes
+        // (a tick with no usable side contributes 0 to both). per bar it is summed across every tick in it
+        out.executedBuys.push_back(t.executedBuys);
+        out.executedSells.push_back(t.executedSells);
+        if (t.unknownVolume > 0.0) whenUnknown(); // custom behavior hook for unclassifiable volume
+
+        // book snapshot at this tick (the closing tick's, for a bar), 0 across the board when the
+        // resting columns aren't mapped in config.toml
+        out.restingBids.push_back(t.restingBids);
+        out.restingAsks.push_back(t.restingAsks);
+        out.bidPrices.push_back(t.bidPrice);
+        out.askPrices.push_back(t.askPrice);
+
+        out.action.push_back(t.action);
+        out.side.push_back(t.side);
+
+        const std::size_t nExtras = kCSVMapping.extras.size();
+        for (std::size_t k = 0; k < nExtras; ++k) out.extras[k].push_back(t.extras[k]);
+
+        processedBars++;
+    }
+
+    // requestDataWindowBy's place in its current span: open between a chunked return and the next call
+    bool _spanOpen = false;
+    long long _spanKey = 0;
+
+public:
     /// @brief pull `period` bars from the market data source, if timeframe is 0
     /// it reads raw ticks; otherwise it reads closes at that many seconds per bar.
     /// returns parallel prices + volumes + executedBuys/executedSells + deltas
@@ -48,33 +125,7 @@ private:
     /// get read (and discarded) between each kept tick, to downsample tick-by-tick data
     DataWindow requestDataWindow(MarketData& md, int period, int timeframe=0, void (*whenUnknown)()=[](){}, int tickRes=1) {
         DataWindow out;
-        out.prices.reserve(period);
-        out.opens.reserve(period);
-        out.highs.reserve(period);
-        out.lows.reserve(period);
-        out.volumes.reserve(period);
-        out.executedSells.reserve(period);
-        out.executedBuys.reserve(period);
-        out.deltas.reserve(period);
-        out.restingBids.reserve(period);
-        out.restingAsks.reserve(period);
-        out.bidPrices.reserve(period);
-        out.askPrices.reserve(period);
-        out.tsRecv.reserve(period);
-        out.tsEvent.reserve(period);
-        out.tsEventNanos.reserve(period);
-        out.rowNumbers.reserve(period);
-        out.action.reserve(period);
-        out.side.reserve(period);
-
-        // [extra] columns: one parallel vector per name, filled from each tick / bar below
-        const auto& extraCols = kCSVMapping.extras;
-        out.extraNames.reserve(extraCols.size());
-        out.extras.resize(extraCols.size());
-        for (std::size_t k = 0; k < extraCols.size(); ++k) {
-            out.extraNames.push_back(extraCols[k].name);
-            out.extras[k].reserve(period);
-        }
+        _reserve(out, period);
 
         if (timeframe==0) {
             for (int i=0; i<period; i++) {
@@ -84,83 +135,99 @@ private:
                     if (!tick) break;
                 }
                 if (!tick) break;
-                double px = 0.0;
-                std::from_chars(tick->price.data(), tick->price.data() + tick->price.size(), px);
-                out.prices.push_back(px);
-                out.opens.push_back(px);
-                out.highs.push_back(px);
-                out.lows.push_back(px);
-                out.deltas.push_back(tick->executedBuys - tick->executedSells);
-                out.volumes.push_back(tick->size);
-                out.tsRecv.push_back(mdDetail::tsToEpochSeconds(tick->tsRecv));
-                out.tsEvent.push_back(tick->tsEvent.empty() ? 0 : mdDetail::tsToEpochSeconds(tick->tsEvent));
-                out.tsEventNanos.push_back(tick->tsEvent.empty() ? 0 : mdDetail::tsToEpochNanos(tick->tsEvent));
-                out.rowNumbers.push_back(tick->rowNumber);
-
-                // aggressor split, pushed unconditionally so these stay index-parallel
-                // with prices/volumes (a tick with no usable side contributes 0 to both)
-                out.executedBuys.push_back(tick->executedBuys);
-                out.executedSells.push_back(tick->executedSells);
-                if (tick->unknownVolume > 0.0) whenUnknown(); // custom behavior hook for
-                                                             // unclassifiable volume
-
-                // book snapshot at this tick, 0 across the board when the resting
-                // columns aren't mapped in config.toml
-                out.restingBids.push_back(tick->restingBids);
-                out.restingAsks.push_back(tick->restingAsks);
-                out.bidPrices.push_back(tick->bidPrice);
-                out.askPrices.push_back(tick->askPrice);
-
-                // action
-                out.action.push_back(tick->action);
-
-                // side
-                out.side.push_back(tick->side);
-
-                for (std::size_t k = 0; k < extraCols.size(); ++k) out.extras[k].push_back(tick->extras[k]);
-
-                processedBars++;
+                _append(out, *tick, false, whenUnknown);
             }
         } else {
             for (int i=0; i<period; i++) { // tickRes is tick-by-tick only
                 auto bar = md.nextClose(timeframe);
                 if (!bar) break;
-                double px = 0.0;
-                std::from_chars(bar->price.data(), bar->price.data() + bar->price.size(), px);
-                out.prices.push_back(px);
-                out.opens.push_back(bar->open);
-                out.highs.push_back(bar->high);
-                out.lows.push_back(bar->low);
-                out.deltas.push_back(bar->executedBuys - bar->executedSells);
-                out.volumes.push_back(bar->size);
-                out.tsRecv.push_back(mdDetail::tsToEpochSeconds(bar->tsRecv));
-                out.tsEvent.push_back(bar->tsEvent.empty() ? 0 : mdDetail::tsToEpochSeconds(bar->tsEvent));
-                out.tsEventNanos.push_back(bar->tsEvent.empty() ? 0 : mdDetail::tsToEpochNanos(bar->tsEvent));
-                out.rowNumbers.push_back(bar->rowNumber);
-
-                // per-bar aggressor split, summed across every tick in the bar
-                out.executedBuys.push_back(bar->executedBuys);
-                out.executedSells.push_back(bar->executedSells);
-                if (bar->unknownVolume > 0.0) whenUnknown();
-
-                // closing tick's book, not a bar aggregate, see DataWindow
-                out.restingBids.push_back(bar->restingBids);
-                out.restingAsks.push_back(bar->restingAsks);
-                out.bidPrices.push_back(bar->bidPrice);
-                out.askPrices.push_back(bar->askPrice);
-
-                // action
-                out.action.push_back(bar->action);
-
-                // side
-                out.side.push_back(bar->side);
-
-                for (std::size_t k = 0; k < extraCols.size(); ++k) out.extras[k].push_back(bar->extras[k]);
-
-                processedBars++;
+                _append(out, *bar, true, whenUnknown);
             }
         }
         return out;
+    }
+
+    /// @brief the next window of rows that share one `key`, instead of a fixed row count. `key` maps a
+    /// row's ts_recv in epoch nanoseconds to any grouping id (a day number, a session, ...); the window
+    /// ends where the id changes, so "one day of data" is a call, not bookkeeping in the caller.
+    /// rows are ticks (timeframe 0) or timeframe-second bars, a bar belongs to the window of its closing row
+    ///
+    /// maxRows caps the size of one returned window so a long span never has to sit in memory at once:
+    /// the span then comes back in chunks, DataWindow::spanDone is false on every chunk but the last, and
+    /// the next call carries on in the same span. 0 = no cap. an empty window means end of data
+    ///
+    /// @param md      the MarketData source to read from
+    /// @param key     callable long long (epoch nanos) -> long long, must not decrease as the data advances
+    /// @param timeframe 0 = tick-by-tick, >0 = close every N seconds
+    /// @param maxRows rows per returned window, 0 = whole span
+    /// @param tickRes timeframe==0 only: keep every Nth tick
+    template <typename KeyFn>
+    DataWindow requestDataWindowBy(MarketData& md, KeyFn key, int timeframe=0, std::size_t maxRows=0,
+                                   void (*whenUnknown)()=[](){}, int tickRes=1) {
+        DataWindow out;
+        _reserve(out, maxRows ? std::min<std::size_t>(maxRows, 4096) : 1024);
+
+        // one record, a tick or a bar, nullopt at the end of the data
+        auto read = [&]() -> std::optional<Tick> {
+            if (timeframe != 0) return md.nextClose(timeframe);
+            std::optional<Tick> t;
+            for (int j = 0; j < tickRes; ++j) { t = md.nextTick(); if (!t) break; }
+            return t;
+        };
+
+        for (;;) {
+            // chunk is full: look one record ahead (and put it back) to say whether the span goes on
+            if (maxRows && out.prices.size() >= maxRows) {
+                const std::size_t before = md.byteOffset();
+                auto next = read();
+                out.spanKey = _spanKey;
+                if (!next || key(mdDetail::tsToEpochNanos(next->tsRecv)) != _spanKey) {
+                    out.spanDone = true;
+                    _spanOpen = false;
+                } else {
+                    out.spanDone = false;
+                }
+                if (next) md.seekTo(before);
+                return out;
+            }
+
+            const std::size_t before = md.byteOffset();
+            auto rec = read();
+            if (!rec) { // end of data closes whatever span was open
+                out.spanKey = _spanKey;
+                out.spanDone = true;
+                _spanOpen = false;
+                return out;
+            }
+
+            const long long k = key(mdDetail::tsToEpochNanos(rec->tsRecv));
+            if (!_spanOpen) {
+                _spanKey = k;
+                _spanOpen = true;
+            } else if (k != _spanKey) { // first record of the next span, hand it back to the reader
+                md.seekTo(before);
+                out.spanKey = _spanKey;
+                out.spanDone = true;
+                _spanOpen = false;
+                return out;
+            }
+            _append(out, *rec, timeframe != 0, whenUnknown);
+        }
+    }
+
+    /// @brief requestDataWindowBy with fixed length windows: [k * spanNanos + offsetNanos, (k + 1) * spanNanos
+    /// + offsetNanos) for whole k, so spans are anchored to the clock, not to the first row. a gap in the data
+    /// just skips the empty spans. offsetNanos shifts the grid, e.g. -5h turns UTC days into fixed-offset
+    /// New York days (it doesn't follow daylight saving, use requestDataWindowBy with your own key for that)
+    /// @param spanNanos  window length in nanoseconds, must be > 0
+    /// @param offsetNanos where the grid starts relative to the epoch
+    DataWindow requestDataWindowNanos(MarketData& md, long long spanNanos, int timeframe=0, std::size_t maxRows=0,
+                                      long long offsetNanos=0, void (*whenUnknown)()=[](){}, int tickRes=1) {
+        if (spanNanos <= 0) throw std::invalid_argument("requestDataWindowNanos: spanNanos must be > 0");
+        return requestDataWindowBy(md, [spanNanos, offsetNanos](long long ns) {
+            const long long x = ns - offsetNanos;
+            return x >= 0 ? x / spanNanos : -((-x + spanNanos - 1) / spanNanos); // floor
+        }, timeframe, maxRows, whenUnknown, tickRes);
     }
 
     // other helper funcs and such
