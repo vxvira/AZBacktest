@@ -701,6 +701,11 @@ public:
     MarketData(const MarketData&)            = delete;
     MarketData& operator=(const MarketData&) = delete;
 
+    /// @brief how far through the file the reader is, 0..1 (bytes read over file size). Parquet reports 0
+    double progress() const {
+        return (_csv && _map.size()) ? static_cast<double>(_csv->byteOffset()) / static_cast<double>(_map.size()) : 0.0;
+    }
+
     /// @brief rows skipped so far for a missing / non-numeric price or timestamp (CSV only, Parquet reads 0)
     std::size_t skippedRows() const { return _csv ? _csv->skippedRows() : 0; }
 

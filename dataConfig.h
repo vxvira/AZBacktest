@@ -26,7 +26,7 @@ struct DateFormat {
 };
 
 /// engine version, bumped with each tagged release
-#define AZBT_VERSION "1.2.1"
+#define AZBT_VERSION "1.3.0"
 
 /// how the timestamp column is written. Iso8601 is Databento's layout and the fast path (bars are
 /// windowed by a string compare), everything else is parsed to a number and windowed numerically

@@ -22,8 +22,6 @@ int main() {
     const int timeframe = 60;   // seconds per bar
     const int batchSize = 500;  // rows per read, an io detail, not a strategy knob
 
-    dataApi.fetchEOF(timeframe);
-
     int bar = 0;
     for (;;) {
         DataWindow window = dataApi.requestDataWindow(md, batchSize, timeframe);
@@ -31,7 +29,7 @@ int main() {
 
         for (std::size_t b = 0; b < window.prices.size(); b++, bar++) {
             if (bar % 5000 == 0)
-                std::cout << "  bar " << bar << " / " << dataApi.eof << std::endl;
+                std::cout << "  " << int(md.progress() * 100) << "%" << std::endl;
 
             prices.assign(1, window.prices[b]);
 

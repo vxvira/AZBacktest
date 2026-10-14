@@ -61,6 +61,25 @@ No `main()` needed, `testFramework.h` supplies one. Assertions are `CHECK`, `CHE
 
 Fixtures are CSV, so the Parquet backend isn't covered by these.
 
+## Runner, bars and day numbers
+
+`Backtest` owns the wiring (price vector, data file, `DataApi`, `TradeApi`), so a strategy is just the loop:
+
+```cpp
+Backtest bt(0.25, 0.50, kCSVMapping.path);
+bt.eachSpan(kDay, 300, kDayStart, [&](const DataWindow& day, const DataWindow& prev) {
+    const double prevAtr = atr(prev);              // prev is empty on the first day
+    for (auto b : bt.bars(day)) {                  // sets the price and ticks the trade per bar
+        if (b.close > b.open) bt.trade.openLong(b.i);
+    }
+});
+```
+
+- `eachWindow(next, f)` is the same loop over any source of windows (a cache, say), `eachSpan` feeds it from the data file. Both close the open trade at the end and return the last window.
+- `Bar` is what you get from `w[i]` or `for (auto b : w)`: `open high low close volume buys sells delta restingBid restingAsk bid ask ts tsEvent row action side`, plus `b.extra("name")`. They're references into the window.
+- `DayIndicators.h`: `dayStats(w, keep)` (open/high/low/close/volume/vwap/range/atr/realizedVol), `atr`, `vwap`, `trueRange`. `keep` is an optional `bool(const Bar&)` to leave bars out, `prevClose` adds the overnight gap.
+- `md.progress()` is 0..1 through the file. It replaces `fetchEOF`/`eof`, which pre-scanned the whole file.
+
 ## Windows by time span
 
 `requestDataWindow(md, n)` returns the next `n` rows. To get "one day of data" without tracking the clock yourself, ask for a span instead:

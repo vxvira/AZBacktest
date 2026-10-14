@@ -27,8 +27,6 @@ int main() {
     const int timeframe = 60;   // seconds per bar
     const int batchSize = 500;  // rows per read, an io detail, not a strategy knob
 
-    dataApi.fetchEOF(timeframe);
-
     // trailing window of closes, capped at longPeriod so the work per bar is flat
     // rather than growing with the length of the backtest
     std::vector<double> history;
@@ -41,7 +39,7 @@ int main() {
 
         for (std::size_t b = 0; b < window.prices.size(); b++, bar++) {
             if (bar % 5000 == 0)
-                std::cout << "  bar " << bar << " / " << dataApi.eof << std::endl;
+                std::cout << "  " << int(md.progress() * 100) << "%" << std::endl;
 
             // this bar is now the current price, and joins the trailing history
             prices.assign(1, window.prices[b]);

@@ -12,7 +12,6 @@
 #include "dataManagement/data.h"
 #include "tradeManagement/tradesApi.h"
 #include "../marketData.h"
-#include "../findEOF.h"
 #include "../../dataConfig.h"
 #include "../analytics/SetAnalytics.h"
 #include "../analytics/PriceAnalytics.h"
@@ -232,17 +231,12 @@ public:
 
     // other helper funcs and such
 
-    int eof = -1; // set to -1 before user requests it
-    void fetchEOF(int timeframe=1, int strideIncrement=2) {
-        eof = findEof(kCSVMapping.path, timeframe, strideIncrement);
-    }
-
     void overrideProcessedBars(int newValue) { processedBars = newValue; }
 
     /// @brief raw value at [row, col] straight from the CSV, an escape hatch for
     /// any column dataConfig.h doesn't map to a named field (nextTick/nextClose
     /// only ever parse timestamp/price/size/aggressor). row is 0-indexed and
-    /// counts data rows after the header, same counting fetchEOF's `eof` uses;
+    /// counts data rows after the header;
     /// col is the 0-indexed comma-separated field. Returns "" if either index
     /// is out of range
     /// @param row 0-indexed data row (header doesn't count)
