@@ -6,7 +6,9 @@
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <string>
+#include <vector>
 #include "src/tomlParser.h"
 
 // substring offsets used to pull Y/M/D out of the timestamp column
@@ -21,6 +23,40 @@ struct DateFormat {
     int monthLength;
     int dayOffset;
     int dayLength;
+};
+
+/// engine version, bumped with each tagged release
+#define AZBT_VERSION "1.2.0"
+
+/// how the timestamp column is written. Iso8601 is Databento's layout and the fast path (bars are
+/// windowed by a string compare), everything else is parsed to a number and windowed numerically
+enum class TimeFormat { Iso8601, EpochSeconds, EpochMillis, EpochMicros, EpochNanos, Date };
+
+/// how an [extra] column folds into a bar. Last is the closing row's value, same snapshot rule the
+/// quote and book columns follow
+enum class ExtraAgg { Last, First, Sum, Min, Max, Mean };
+
+/// most [extra] columns a Tick can carry (they live in a fixed array so ticks never allocate)
+inline constexpr int kMaxExtras = 16;
+
+/// a user named numeric column carried through to Tick::extras / DataWindow::extras
+struct ExtraColumn {
+    std::string name;          // what DataWindow::extra("name") looks it up by
+    std::string header;        // column name in the file, empty when it was given as an index
+    int col = -1;
+    ExtraAgg agg = ExtraAgg::Last;
+};
+
+enum class FilterOp { Eq, Ne, Lt, Le, Gt, Ge, Contains, NotContains };
+
+/// one [filter] condition, rows that fail it never reach the symbol logic or the bars
+struct RowFilter {
+    std::string header;        // column name in the file, empty when it was given as an index
+    int col = -1;
+    FilterOp op = FilterOp::Eq;
+    std::string operand;
+    double number = 0.0;
+    bool numeric = false;      // operand parsed as a number, comparisons then are numeric
 };
 
 struct CSVMapping {
@@ -103,6 +139,29 @@ struct CSVMapping {
     // before anything sees them. on MBP-1 every add/cancel/modify is a row and its price is a resting
     // order's, so without this bar highs/lows, volume and the closing price are built from book events
     bool tradesOnly = false;
+
+    // ---- generalised data layer (1.2.0), everything below defaults to the old behaviour ----
+
+    TimeFormat timeFormat = TimeFormat::Iso8601;
+
+    char delimiter = ',';
+    bool quoted    = false;      // honour "..." around fields, slower reader
+
+    // rows whose price or timestamp is missing / not a number are skipped (and counted) instead of
+    // turning into a price 0 bar. CSV only
+    bool skipBadRows = true;
+
+    // each row already is a bar (cleaned / pre-aggregated data). priceCol is the close, open / high / low
+    // columns are optional and fall back to the close. timeframe is ignored in this mode
+    bool rowsAreBars = false;
+    int openCol = -1, highCol = -1, lowCol = -1;
+
+    std::vector<ExtraColumn> extras;   // [extra]
+    std::vector<RowFilter> filters;    // [filter]
+
+    // *Col keys given as a header name instead of an index land here (config key -> header name) and
+    // get resolved against the header when a file is opened, see mdDetail::resolveColumnNames
+    std::map<std::string, std::string> colNames;
 };
 
 // persistent string storage so const char* fields stay valid
@@ -152,6 +211,65 @@ inline CSVMapping kCSVMapping{
     -1, "A", "C", "M", "T", "F", "R", "N",  // action column disabled, default aliases
     0.f, 0.f, 0.f                           // costs
 };
+
+// config parsing helpers, after kCSVMapping because colSpec records header names in it
+namespace cfgDetail {
+    inline bool isIndex(const std::string& v) {
+        if (v.empty()) return false;
+        std::size_t i = (v[0] == '-' || v[0] == '+') ? 1 : 0;
+        if (i == v.size()) return false;
+        for (; i < v.size(); ++i) if (v[i] < '0' || v[i] > '9') return false;
+        return true;
+    }
+
+    /// a column given as an index ("3", "-1") or a header name ("price"). names come back as -1 and
+    /// are remembered under `key` until a file is opened and the header can resolve them
+    inline int colSpec(const toml::Table& cfg, const std::string& key, int def) {
+        std::string v = toml::getString(cfg, "", key, "");
+        if (v.empty()) return def;
+        if (isIndex(v)) return std::stoi(v);
+        kCSVMapping.colNames[key] = v;
+        return -1;
+    }
+
+    /// "implied_vol:mean" -> column "implied_vol", aggregation Mean. no suffix means Last
+    inline ExtraColumn parseExtra(const std::string& name, std::string spec) {
+        ExtraColumn e;
+        e.name = name;
+        auto colon = spec.rfind(':');
+        if (colon != std::string::npos) {
+            const std::string a = spec.substr(colon + 1);
+            const std::pair<const char*, ExtraAgg> aggs[] = {
+                {"last", ExtraAgg::Last}, {"first", ExtraAgg::First}, {"sum", ExtraAgg::Sum},
+                {"min", ExtraAgg::Min},   {"max", ExtraAgg::Max},     {"mean", ExtraAgg::Mean}};
+            for (auto& [k, v] : aggs) if (a == k) { e.agg = v; spec = spec.substr(0, colon); break; }
+        }
+        if (isIndex(spec)) e.col = std::stoi(spec); else e.header = spec;
+        return e;
+    }
+
+    /// [filter] value: optional operator (== != < <= > >= ~ !~) then the operand. ~ is "contains",
+    /// a bare value is equality, "!" alone is shorthand for !=
+    inline RowFilter parseFilter(const std::string& column, std::string v) {
+        RowFilter f;
+        if (isIndex(column)) f.col = std::stoi(column); else f.header = column;
+        const std::pair<const char*, FilterOp> ops[] = {
+            {"!~", FilterOp::NotContains}, {"==", FilterOp::Eq}, {"!=", FilterOp::Ne},
+            {"<=", FilterOp::Le},          {">=", FilterOp::Ge}, {"~", FilterOp::Contains},
+            {"<", FilterOp::Lt},           {">", FilterOp::Gt},  {"=", FilterOp::Eq}, {"!", FilterOp::Ne}};
+        for (auto& [sym, op] : ops) {
+            const std::size_t len = std::char_traits<char>::length(sym);
+            if (v.compare(0, len, sym) == 0) { f.op = op; v = v.substr(len); break; }
+        }
+        f.operand = v;
+        try {
+            std::size_t used = 0;
+            f.number = std::stod(v, &used);
+            f.numeric = used == v.size() && !v.empty();
+        } catch (...) {}
+        return f;
+    }
+}
 
 inline void generateDefaultConfig(const char* tomlPath) {
     std::ofstream out(tomlPath);
@@ -215,6 +333,26 @@ actionNoneAlias = "N"
 # bar highs/lows/volume are only meaningful with this on
 tradesOnly = false
 
+# ---- data layout -------------------------------------------------------
+# every *Col key above also takes a header name instead of an index, e.g. priceCol = "price"
+
+# how the timestamp column is written: iso8601 (default), epoch_s, epoch_ms, epoch_us, epoch_ns, date
+timeFormat = "iso8601"
+
+# field separator ("," default, "tab", ";", "|") and whether "..." quoting is honoured (slower)
+delimiter = ","
+quoted    = false
+
+# rows with a missing / non-numeric price or timestamp are skipped instead of becoming price 0
+skipBadRows = true
+
+# ticks: rows are trades / quotes and get aggregated into timeframe bars (default)
+# rows : every row already is a bar. priceCol is the close, openCol / highCol / lowCol are optional
+barMode = "ticks"
+openCol = -1
+highCol = -1
+lowCol  = -1
+
 # extra MBP columns, set to -1 to disable
 # on Databento MBP-1: flags(10), bid_ct_00(17), ask_ct_00(18), instrument_id(4)
 flagsCol      = -1
@@ -226,6 +364,20 @@ instrumentCol = -1
 commission = 0.0
 spread     = 0.0
 timingCost = 0.0
+
+# any number of extra numeric columns carried through to DataWindow::extras, read with w.extra("name")
+# "column" or "column:agg", agg folds them into a bar: last (default) first sum min max mean
+# [extra]
+# iv  = "implied_vol:mean"
+# oi  = 7
+
+# keep only rows that pass every condition, checked before the symbol logic. key = column (name or index),
+# value = optional operator then operand: == != < <= > >= ~ (contains) !~ (doesn't contain), bare = equality
+# numbers compare numerically, anything else as text
+# [filter]
+# action = "T"       # trades only
+# symbol = "!~-"     # drop calendar spreads like NQU6-NQZ6
+# price  = ">0"
 
 # substring offsets for pulling Y/M/D out of the timestamp column
 # defaults match Databento's ISO-8601 format: 2025-06-01T22:00:00.065308005Z
@@ -266,9 +418,9 @@ inline void loadConfig(const char* tomlPath = "config.toml") {
 
     auto cfg = toml::parse(tomlPath);
 
-    kCSVMapping.tsRecvCol = toml::getInt(cfg, "", "tsRecvCol");
-    kCSVMapping.priceCol  = toml::getInt(cfg, "", "priceCol");
-    kCSVMapping.sizeCol   = toml::getInt(cfg, "", "sizeCol");
+    kCSVMapping.tsRecvCol = cfgDetail::colSpec(cfg, "tsRecvCol", 0);
+    kCSVMapping.priceCol  = cfgDetail::colSpec(cfg, "priceCol", 0);
+    kCSVMapping.sizeCol   = cfgDetail::colSpec(cfg, "sizeCol", 0);
 
     cfgDetail::pathStr = toml::getString(cfg, "", "path");
     kCSVMapping.path   = cfgDetail::pathStr.c_str();
@@ -282,15 +434,15 @@ inline void loadConfig(const char* tomlPath = "config.toml") {
 
     kCSVMapping.skipHeader = toml::getBool(cfg, "", "skipHeader", true);
 
-    kCSVMapping.tsEventCol   = toml::getInt(cfg, "", "tsEventCol", -1);
-    kCSVMapping.rowNumberCol = toml::getInt(cfg, "", "rowNumberCol", -1);
+    kCSVMapping.tsEventCol   = cfgDetail::colSpec(cfg, "tsEventCol", -1);
+    kCSVMapping.rowNumberCol = cfgDetail::colSpec(cfg, "rowNumberCol", -1);
 
-    kCSVMapping.symbolCol = toml::getInt(cfg, "", "symbolCol", -1);
+    kCSVMapping.symbolCol = cfgDetail::colSpec(cfg, "symbolCol", -1);
     cfgDetail::symbolStr  = toml::getString(cfg, "", "symbol");
     kCSVMapping.symbol    = cfgDetail::symbolStr.c_str();
     kCSVMapping.symbolRoll = toml::getBool(cfg, "", "symbolRoll", false);
 
-    kCSVMapping.aggressor = toml::getInt(cfg, "", "aggressor", -1);
+    kCSVMapping.aggressor = cfgDetail::colSpec(cfg, "aggressor", -1);
     cfgDetail::buySideStr = toml::getString(cfg, "", "buySideAggressorAlias", "B");
     kCSVMapping.buySideAggressorAlias = cfgDetail::buySideStr.c_str();
     cfgDetail::sellSideStr = toml::getString(cfg, "", "sellSideAggressorAlias", "S");
@@ -298,13 +450,13 @@ inline void loadConfig(const char* tomlPath = "config.toml") {
     cfgDetail::unknownSideStr = toml::getString(cfg, "", "unknownSideAggressorAlias", "N");
     kCSVMapping.unknownSideAggressorAlias = cfgDetail::unknownSideStr.c_str();
 
-    kCSVMapping.restingBidCol = toml::getInt(cfg, "", "restingBidCol", -1);
-    kCSVMapping.restingAskCol = toml::getInt(cfg, "", "restingAskCol", -1);
+    kCSVMapping.restingBidCol = cfgDetail::colSpec(cfg, "restingBidCol", -1);
+    kCSVMapping.restingAskCol = cfgDetail::colSpec(cfg, "restingAskCol", -1);
 
-    kCSVMapping.bidPriceCol = toml::getInt(cfg, "", "bidPriceCol", -1);
-    kCSVMapping.askPriceCol = toml::getInt(cfg, "", "askPriceCol", -1);
+    kCSVMapping.bidPriceCol = cfgDetail::colSpec(cfg, "bidPriceCol", -1);
+    kCSVMapping.askPriceCol = cfgDetail::colSpec(cfg, "askPriceCol", -1);
 
-    kCSVMapping.actionCol = toml::getInt(cfg, "", "actionCol", -1);
+    kCSVMapping.actionCol = cfgDetail::colSpec(cfg, "actionCol", -1);
     cfgDetail::actionAddAliasStr = toml::getString(cfg, "", "actionAddAlias", "A");
     kCSVMapping.actionAddAlias = cfgDetail::actionAddAliasStr.c_str();
     cfgDetail::actionCancelAliasStr = toml::getString(cfg, "", "actionCancelAlias", "C");
@@ -321,10 +473,45 @@ inline void loadConfig(const char* tomlPath = "config.toml") {
     kCSVMapping.actionNoneAlias = cfgDetail::actionNoneAliasStr.c_str();
     kCSVMapping.tradesOnly = toml::getBool(cfg, "", "tradesOnly", false);
 
-    kCSVMapping.flagsCol      = toml::getInt(cfg, "", "flagsCol", -1);
-    kCSVMapping.bidCountCol   = toml::getInt(cfg, "", "bidCountCol", -1);
-    kCSVMapping.askCountCol   = toml::getInt(cfg, "", "askCountCol", -1);
-    kCSVMapping.instrumentCol = toml::getInt(cfg, "", "instrumentCol", -1);
+    {
+        const std::string tf = toml::getString(cfg, "", "timeFormat", "iso8601");
+        const std::pair<const char*, TimeFormat> formats[] = {
+            {"iso8601", TimeFormat::Iso8601},      {"epoch_s", TimeFormat::EpochSeconds},
+            {"epoch_ms", TimeFormat::EpochMillis}, {"epoch_us", TimeFormat::EpochMicros},
+            {"epoch_ns", TimeFormat::EpochNanos},  {"date", TimeFormat::Date}};
+        bool known = false;
+        for (auto& [name, fmt] : formats) if (tf == name) { kCSVMapping.timeFormat = fmt; known = true; }
+        if (!known) throw std::runtime_error("config: unknown timeFormat \"" + tf +
+                         "\", use iso8601, epoch_s, epoch_ms, epoch_us, epoch_ns or date");
+    }
+
+    {
+        std::string d = toml::getString(cfg, "", "delimiter", ",");
+        if (d == "tab" || d == "\\t") kCSVMapping.delimiter = '\t';
+        else if (!d.empty())          kCSVMapping.delimiter = d[0];
+    }
+    kCSVMapping.quoted      = toml::getBool(cfg, "", "quoted", false);
+    kCSVMapping.skipBadRows = toml::getBool(cfg, "", "skipBadRows", true);
+
+    kCSVMapping.rowsAreBars = toml::getString(cfg, "", "barMode", "ticks") == "rows";
+    kCSVMapping.openCol = cfgDetail::colSpec(cfg, "openCol", -1);
+    kCSVMapping.highCol = cfgDetail::colSpec(cfg, "highCol", -1);
+    kCSVMapping.lowCol  = cfgDetail::colSpec(cfg, "lowCol", -1);
+
+    kCSVMapping.extras.clear();
+    if (auto it = cfg.find("extra"); it != cfg.end())
+        for (auto& [name, spec] : it->second) kCSVMapping.extras.push_back(cfgDetail::parseExtra(name, spec));
+    if ((int)kCSVMapping.extras.size() > kMaxExtras)
+        throw std::runtime_error("config: more than " + std::to_string(kMaxExtras) + " [extra] columns");
+
+    kCSVMapping.filters.clear();
+    if (auto it = cfg.find("filter"); it != cfg.end())
+        for (auto& [column, v] : it->second) kCSVMapping.filters.push_back(cfgDetail::parseFilter(column, v));
+
+    kCSVMapping.flagsCol      = cfgDetail::colSpec(cfg, "flagsCol", -1);
+    kCSVMapping.bidCountCol   = cfgDetail::colSpec(cfg, "bidCountCol", -1);
+    kCSVMapping.askCountCol   = cfgDetail::colSpec(cfg, "askCountCol", -1);
+    kCSVMapping.instrumentCol = cfgDetail::colSpec(cfg, "instrumentCol", -1);
 
     kCSVMapping.commision  = toml::getFloat(cfg, "", "commission", 0.f);
     kCSVMapping.spread     = toml::getFloat(cfg, "", "spread", 0.f);

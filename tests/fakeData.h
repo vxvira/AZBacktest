@@ -134,6 +134,16 @@ inline void useFixtureMapping() {
     kCSVMapping.instrumentCol = -1;
     kCSVMapping.tradesOnly    = false;
 
+    kCSVMapping.timeFormat  = TimeFormat::Iso8601;
+    kCSVMapping.delimiter   = ',';
+    kCSVMapping.quoted      = false;
+    kCSVMapping.skipBadRows = true;
+    kCSVMapping.rowsAreBars = false;
+    kCSVMapping.openCol = kCSVMapping.highCol = kCSVMapping.lowCol = -1;
+    kCSVMapping.extras.clear();
+    kCSVMapping.filters.clear();
+    kCSVMapping.colNames.clear();
+
     kCSVMapping.commision  = 0.f;
     kCSVMapping.spread     = 0.f;
     kCSVMapping.timingCost = 0.f;

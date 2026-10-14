@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 /// @brief parallel prices + volumes returned by DataApi::requestDataWindow
@@ -43,4 +45,17 @@ struct DataWindow {
     std::vector<long long> rowNumbers; // from rowNumberCol, 0 when not configured
     std::vector<const char*> action;
     std::vector<const char*> side; 
+
+    /// [extra] columns from config.toml, extraNames[k] is the name of extras[k] and extras[k][i] belongs
+    /// to prices[i] like every other vector here. NaN where a row had no usable value
+    std::vector<std::string> extraNames;
+    std::vector<std::vector<double>> extras;
+
+    /// @brief the [extra] column called `name`
+    /// @throws std::runtime_error if config.toml declares no such column
+    const std::vector<double>& extra(const std::string& name) const {
+        for (std::size_t k = 0; k < extraNames.size(); ++k)
+            if (extraNames[k] == name) return extras[k];
+        throw std::runtime_error("DataWindow::extra: no [extra] column called \"" + name + "\" in config.toml");
+    }
 };

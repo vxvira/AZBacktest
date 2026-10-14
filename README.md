@@ -131,6 +131,41 @@ actionNoneAlias   = "N"
 # order's, so bar highs/lows/volume are only real trades with this on
 tradesOnly = false
 
+# ---- data layout (1.2.0), CSV only, everything defaults to the behaviour above ----
+
+# every *Col key also takes a header name instead of an index, e.g. priceCol = "price"
+
+# how the timestamp column is written: iso8601 (default), epoch_s, epoch_ms, epoch_us, epoch_ns, date
+timeFormat = "iso8601"
+
+# field separator ("," default, "tab", ";", "|") and whether "..." quoting is honoured (slower)
+delimiter = ","
+quoted    = false
+
+# rows with a missing / non-numeric price or timestamp are skipped (MarketData::skippedRows()) instead of becoming price 0
+skipBadRows = true
+
+# ticks: rows get aggregated into timeframe bars (default)
+# rows : every row already is a bar, priceCol is the close, openCol / highCol / lowCol are optional
+barMode = "ticks"
+openCol = -1
+highCol = -1
+lowCol  = -1
+
+# [extra] and [filter] are sections, put them at the end of the file (after [dateFormat] and the like)
+# any number of extra numeric columns, read with w.extra("iv") on a DataWindow
+# "column" or "column:agg", agg folds them into a bar: last (default) first sum min max mean
+# [extra]
+# iv = "implied_vol:mean"
+
+# keep only rows passing every condition, checked before the symbol logic
+# key = column (name or index), value = optional operator then operand: == != < <= > >= ~ (contains) !~ (doesn't contain)
+# numbers compare numerically, anything else as text
+# [filter]
+# action = "T"       # trades only
+# symbol = "!~-"     # drop calendar spreads like NQU6-NQZ6
+# price  = ">0"
+
 # trading costs (all in pts)
 commission = 0.0
 spread     = 0.0

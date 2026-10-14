@@ -67,6 +67,15 @@ private:
         out.action.reserve(period);
         out.side.reserve(period);
 
+        // [extra] columns: one parallel vector per name, filled from each tick / bar below
+        const auto& extraCols = kCSVMapping.extras;
+        out.extraNames.reserve(extraCols.size());
+        out.extras.resize(extraCols.size());
+        for (std::size_t k = 0; k < extraCols.size(); ++k) {
+            out.extraNames.push_back(extraCols[k].name);
+            out.extras[k].reserve(period);
+        }
+
         if (timeframe==0) {
             for (int i=0; i<period; i++) {
                 std::optional<Tick> tick;
@@ -108,6 +117,8 @@ private:
                 // side
                 out.side.push_back(tick->side);
 
+                for (std::size_t k = 0; k < extraCols.size(); ++k) out.extras[k].push_back(tick->extras[k]);
+
                 processedBars++;
             }
         } else {
@@ -143,6 +154,8 @@ private:
 
                 // side
                 out.side.push_back(bar->side);
+
+                for (std::size_t k = 0; k < extraCols.size(); ++k) out.extras[k].push_back(bar->extras[k]);
 
                 processedBars++;
             }

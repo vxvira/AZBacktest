@@ -12,7 +12,10 @@
 #include "csv.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
+#include <cmath>
+#include <limits>
 #include <cstdio>
 #include <cstddef>
 #include <memory>
@@ -82,6 +85,9 @@ struct Tick {
     double askCount       = 0.0; // askCountCol, resting orders at the best ask
     long long instrumentId = 0; // instrumentCol
     std::string_view symbol;    // symbolCol, filled whether or not it filters
+    // [extra] columns in config order, NaN where a row had no usable value. for nextClose each one
+    // is folded over the bar by its aggregation (default: the closing row's value)
+    std::array<double, kMaxExtras> extras = [] { std::array<double, kMaxExtras> a; a.fill(std::numeric_limits<double>::quiet_NaN()); return a; }();
 };
 
 namespace mdDetail {
@@ -117,7 +123,37 @@ inline CivilDate daysToCivil(long long z) {
 /// Y/M/D offsets come from dataConfig so different CSV formats just work
 /// H/M/S offsets are hardcoded (they don't move around in ISO-8601)
 /// @param ts the raw timestamp string_view from the CSV row
+inline long long tsToEpochSeconds(std::string_view ts);
+
+/// @brief numeric epoch timestamps: the raw count and how many of them make a second
+inline long long epochDivisor(TimeFormat f) {
+    switch (f) {
+        case TimeFormat::EpochMillis: return 1'000LL;
+        case TimeFormat::EpochMicros: return 1'000'000LL;
+        case TimeFormat::EpochNanos:  return 1'000'000'000LL;
+        default:                      return 1LL;
+    }
+}
+
+/// @brief a numeric timestamp as an integer count of its unit, integer text goes through from_chars
+/// untouched (nanosecond epochs are too big for a double), "1.7e9" / "1700000000.5" fall back to a double
+inline long long parseEpochUnits(std::string_view ts) {
+    while (!ts.empty() && ts.front() == ' ') ts.remove_prefix(1);
+    long long v = 0;
+    auto r = std::from_chars(ts.data(), ts.data() + ts.size(), v);
+    if (r.ec == std::errc() && (r.ptr == ts.data() + ts.size() || (*r.ptr != '.' && *r.ptr != 'e' && *r.ptr != 'E')))
+        return v;
+    double d = 0.0;
+    std::from_chars(ts.data(), ts.data() + ts.size(), d);
+    return static_cast<long long>(d);
+}
+
 inline long long tsToEpochSeconds(std::string_view ts) {
+    if (kCSVMapping.timeFormat != TimeFormat::Iso8601 && kCSVMapping.timeFormat != TimeFormat::Date) {
+        const long long div = epochDivisor(kCSVMapping.timeFormat);
+        const long long v = parseEpochUnits(ts);
+        return v >= 0 ? v / div : -((-v + div - 1) / div); // floor, so pre-1970 stamps round down
+    }
     auto toInt = [](const char* p, int n) {
         int v = 0;
         std::from_chars(p, p + n, v);
@@ -126,9 +162,12 @@ inline long long tsToEpochSeconds(std::string_view ts) {
     int y  = toInt(ts.data() + kCSVMapping.dateFormat.yearOffset,  kCSVMapping.dateFormat.yearLength);
     int mo = toInt(ts.data() + kCSVMapping.dateFormat.monthOffset, kCSVMapping.dateFormat.monthLength);
     int d  = toInt(ts.data() + kCSVMapping.dateFormat.dayOffset,   kCSVMapping.dateFormat.dayLength);
-    int h  = toInt(ts.data() + 11, 2);
-    int mi = toInt(ts.data() + 14, 2);
-    int s  = toInt(ts.data() + 17, 2);
+    int h = 0, mi = 0, s = 0;
+    if (kCSVMapping.timeFormat == TimeFormat::Iso8601) {
+        h  = toInt(ts.data() + 11, 2);
+        mi = toInt(ts.data() + 14, 2);
+        s  = toInt(ts.data() + 17, 2);
+    }
     return civilToDays(y, static_cast<unsigned>(mo), static_cast<unsigned>(d)) * 86400LL
          + h * 3600LL + mi * 60LL + s;
 }
@@ -136,6 +175,10 @@ inline long long tsToEpochSeconds(std::string_view ts) {
 /// @brief tsToEpochSeconds plus the 9 fractional digits, full epoch nanoseconds
 /// e.g. "2026-06-21T12:00:06.108130665Z"
 inline long long tsToEpochNanos(std::string_view ts) {
+    if (kCSVMapping.timeFormat != TimeFormat::Iso8601 && kCSVMapping.timeFormat != TimeFormat::Date) {
+        const long long perSec = 1'000'000'000LL / epochDivisor(kCSVMapping.timeFormat);
+        return parseEpochUnits(ts) * perSec;
+    }
     long long nanos = 0;
     if (ts.size() >= 29) std::from_chars(ts.data() + 20, ts.data() + 29, nanos);
     return tsToEpochSeconds(ts) * 1'000'000'000LL + nanos;
@@ -208,9 +251,108 @@ inline const char* classifyAction(std::string_view actionView) {
 /// kCSVMapping.skipHeader so a headerless file reads its first row as data
 inline csv::Options marketDataCsvOptions() {
     csv::Options opt;
-    opt.header = kCSVMapping.skipHeader;
+    opt.header    = kCSVMapping.skipHeader;
+    opt.delimiter = kCSVMapping.delimiter;
+    opt.quoted    = kCSVMapping.quoted;
     return opt;
 }
+
+namespace mdDetail {
+
+/// @brief turn every column the config gave as a header name into its index, against `in`'s header.
+/// safe to call again on a second file, the names stay in kCSVMapping.colNames
+/// @throws std::runtime_error naming the missing column and listing the header
+inline void resolveColumnNames(const csv::Reader& in) {
+    auto& m = kCSVMapping;
+    auto find = [&](const std::string& name) {
+        const int c = in.column(name);
+        if (c >= 0) return c;
+        std::string have;
+        for (auto f : in.header().split()) have += (have.empty() ? "" : ", ") + std::string(f);
+        throw std::runtime_error("column \"" + name + "\" not found in the file header (" +
+                                 (have.empty() ? std::string("no header, set skipHeader = true") : have) + ")");
+    };
+
+    const std::pair<const char*, int*> keyed[] = {
+        {"tsRecvCol", &m.tsRecvCol},   {"priceCol", &m.priceCol},         {"sizeCol", &m.sizeCol},
+        {"tsEventCol", &m.tsEventCol}, {"rowNumberCol", &m.rowNumberCol}, {"symbolCol", &m.symbolCol},
+        {"aggressor", &m.aggressor},   {"restingBidCol", &m.restingBidCol}, {"restingAskCol", &m.restingAskCol},
+        {"bidPriceCol", &m.bidPriceCol}, {"askPriceCol", &m.askPriceCol}, {"actionCol", &m.actionCol},
+        {"flagsCol", &m.flagsCol},     {"bidCountCol", &m.bidCountCol},   {"askCountCol", &m.askCountCol},
+        {"instrumentCol", &m.instrumentCol}, {"openCol", &m.openCol},     {"highCol", &m.highCol},
+        {"lowCol", &m.lowCol}};
+    for (auto& [key, dst] : keyed) {
+        auto it = m.colNames.find(key);
+        if (it != m.colNames.end()) *dst = find(it->second);
+    }
+    for (auto& e : m.extras) if (!e.header.empty()) e.col = find(e.header);
+    for (auto& f : m.filters) if (!f.header.empty()) f.col = find(f.header);
+}
+
+/// @brief does a [filter] condition hold for this field value
+inline bool filterPasses(const RowFilter& f, std::string_view v) {
+    if (f.op == FilterOp::Contains)    return v.find(f.operand) != std::string_view::npos;
+    if (f.op == FilterOp::NotContains) return v.find(f.operand) == std::string_view::npos;
+    if (f.numeric) {
+        double x = 0.0;
+        if (!csv::parse(v, x)) return f.op == FilterOp::Ne; // a cell that isn't a number can't equal / order against one
+        switch (f.op) {
+            case FilterOp::Eq: return x == f.number;
+            case FilterOp::Ne: return x != f.number;
+            case FilterOp::Lt: return x <  f.number;
+            case FilterOp::Le: return x <= f.number;
+            case FilterOp::Gt: return x >  f.number;
+            default:           return x >= f.number;
+        }
+    }
+    const int c = v.compare(f.operand);
+    switch (f.op) {
+        case FilterOp::Eq: return c == 0;
+        case FilterOp::Ne: return c != 0;
+        case FilterOp::Lt: return c <  0;
+        case FilterOp::Le: return c <= 0;
+        case FilterOp::Gt: return c >  0;
+        default:           return c >= 0;
+    }
+}
+
+/// @brief strip one pair of surrounding quotes, for configs with quoted = true
+inline std::string_view unquoted(std::string_view v) {
+    if (v.size() >= 2 && v.front() == '"' && v.back() == '"') return v.substr(1, v.size() - 2);
+    return v;
+}
+
+/// @brief a cell that starts like a number, cheap enough to run on every row (empty, NaN, null, N/A all fail)
+inline bool looksNumeric(std::string_view v) {
+    while (!v.empty() && v.front() == ' ') v.remove_prefix(1);
+    if (v.empty()) return false;
+    const char c = v.front();
+    return (c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.';
+}
+
+/// @brief fold one value into an [extra] column's running aggregate
+struct ExtraAcc {
+    double first = 0, last = 0, sum = 0, lo = 0, hi = 0;
+    int n = 0;
+    void add(double x) {
+        if (n == 0) first = lo = hi = x;
+        last = x; sum += x; lo = std::min(lo, x); hi = std::max(hi, x);
+        ++n;
+    }
+    double value(ExtraAgg a) const {
+        if (n == 0) return std::numeric_limits<double>::quiet_NaN();
+        switch (a) {
+            case ExtraAgg::First: return first;
+            case ExtraAgg::Sum:   return sum;
+            case ExtraAgg::Min:   return lo;
+            case ExtraAgg::Max:   return hi;
+            case ExtraAgg::Mean:  return sum / n;
+            default:              return last;
+        }
+    }
+};
+
+} // namespace mdDetail
 
 /// @brief kCSVMapping-aware reader over a raw byte range, used internally by MarketData
 class _MarketData {
@@ -221,6 +363,52 @@ private:
     std::string _activeSymbol;
     int _missCount = 0;
     static constexpr int _rollThreshold = 200;
+
+    // bad rows skipped so far
+    std::size_t _skipped = 0;
+
+    // the columns the row check needs, fetched in one pass: [0] timestamp, [1] price, then one per [filter]
+    std::vector<int> _checkCols;
+    std::vector<std::string_view> _vals; // scratch for the fields above, one per column
+
+    void _buildCheckCols() {
+        _checkCols = { kCSVMapping.tsRecvCol, kCSVMapping.priceCol };
+        for (auto& f : kCSVMapping.filters) _checkCols.push_back(f.col);
+        _vals.assign(_checkCols.size(), {});
+    }
+
+    // next row that is usable (price and timestamp present, with skipBadRows) and passes every [filter].
+    // runs before the symbol logic so rows a filter drops never count as contract-roll misses
+    std::optional<csv::Row> _nextAcceptedRow() {
+        const auto& m = kCSVMapping;
+        const bool check = m.skipBadRows || !m.filters.empty();
+        if (!check) return _in.next();
+
+        std::string_view* v = _vals.data();
+        const int width = static_cast<int>(_checkCols.size());
+        while (auto row = _in.next()) {
+            if (row->empty()) continue;
+            for (int i = 0; i < width; ++i) v[i] = {};
+            row->fields(_checkCols.data(), width, v);
+            if (m.quoted) for (int i = 0; i < width; ++i) v[i] = mdDetail::unquoted(v[i]);
+
+            if (m.skipBadRows) {
+                bool ok = mdDetail::looksNumeric(v[1]);
+                if (ok && m.tsRecvCol >= 0) {
+                    const std::string_view ts = v[0];
+                    ok = !ts.empty() && (m.timeFormat == TimeFormat::Iso8601 ? ts.size() >= 19
+                                         : mdDetail::looksNumeric(ts) || m.timeFormat == TimeFormat::Date);
+                }
+                if (!ok) { ++_skipped; continue; }
+            }
+
+            bool pass = true;
+            for (std::size_t i = 0; pass && i < m.filters.size(); ++i)
+                pass = mdDetail::filterPasses(m.filters[i], v[2 + i]);
+            if (pass) return row;
+        }
+        return std::nullopt;
+    }
 
     // next row that passes the symbol filter and, with tradesOnly, is a trade, consumed
     std::optional<csv::Row> _nextMatchingRow() {
@@ -235,9 +423,9 @@ private:
     // handles both exact match and rolling contract mode
     std::optional<csv::Row> _nextSymbolRow() {
         // an empty symbol means "read the column but don't filter on it"
-        if (kCSVMapping.symbolCol < 0 || kCSVMapping.symbol[0] == '\0') return _in.next();
+        if (kCSVMapping.symbolCol < 0 || kCSVMapping.symbol[0] == '\0') return _nextAcceptedRow();
         std::string_view root(kCSVMapping.symbol);
-        while (auto row = _in.next()) {
+        while (auto row = _nextAcceptedRow()) {
             std::string_view sym = (*row)[kCSVMapping.symbolCol];
 
             if (!kCSVMapping.symbolRoll) {
@@ -317,12 +505,23 @@ private:
         }
 
         if (kCSVMapping.actionCol >= 0) t.action = mdDetail::classifyAction(f[10]);
+
+        for (std::size_t i = 0; i < kCSVMapping.extras.size(); ++i) {
+            double x = 0.0;
+            if (csv::parse(row[kCSVMapping.extras[i].col], x)) t.extras[i] = x;
+        }
         return t;
     }
 
 public:
     _MarketData(const char* data, std::size_t size)
-        : _in(data, size, marketDataCsvOptions()) {}
+        : _in(data, size, marketDataCsvOptions()) {
+        mdDetail::resolveColumnNames(_in);
+        _buildCheckCols();
+    }
+
+    /// @brief rows skipped for a missing / non-numeric price or timestamp
+    std::size_t skippedRows() const { return _skipped; }
 
     // skip past one line without parsing, returns false at EOF
     bool skipLine() { return _in.skip(); }
@@ -350,6 +549,18 @@ public:
         auto first = _nextMatchingRow();
         if (!first) return std::nullopt;
 
+        // every row already is a bar: price is the close, open / high / low come from their columns
+        // when mapped and default to the close
+        if (kCSVMapping.rowsAreBars) {
+            Tick t = _parseRow(*first);
+            const double close = csv::as<double>(t.price);
+            t.open = t.high = t.low = close;
+            csv::parse((*first)[kCSVMapping.openCol], t.open);
+            csv::parse((*first)[kCSVMapping.highCol], t.high);
+            csv::parse((*first)[kCSVMapping.lowCol],  t.low);
+            return t;
+        }
+
         // the four columns every row in the bar needs, pulled in one pass
         const int cols[4] = { kCSVMapping.tsRecvCol, kCSVMapping.priceCol,
                               kCSVMapping.sizeCol,   kCSVMapping.aggressor };
@@ -357,6 +568,9 @@ public:
         double barVolume = 0.0, buys = 0.0, sells = 0.0, unknown = 0.0;
         double open = 0.0, high = 0.0, low = 0.0;
         bool firstRow = true;
+
+        const std::size_t nExtras = kCSVMapping.extras.size();
+        mdDetail::ExtraAcc extraAcc[kMaxExtras];
 
         // fold one row's price and size into the bar's range and the running
         // per-side totals, hands back the row's timestamp
@@ -373,20 +587,38 @@ public:
             if (kCSVMapping.aggressor >= 0 && f[3] == kCSVMapping.buySideAggressorAlias)       buys    += sz;
             else if (kCSVMapping.aggressor >= 0 && f[3] == kCSVMapping.sellSideAggressorAlias) sells   += sz;
             else                                                                               unknown += sz;
+
+            for (std::size_t i = 0; i < nExtras; ++i) {
+                double x = 0.0;
+                if (csv::parse(row[kCSVMapping.extras[i].col], x)) extraAcc[i].add(x);
+            }
             return f[0];
         };
 
         std::string_view firstTs = accumulate(*first);
-        std::string targetOwned  = mdDetail::endTimestamp(firstTs, seconds);
-        std::string_view target(targetOwned);
-
         csv::Row last = *first;
-        std::string_view lastTs = firstTs;
-        while (lastTs < target) {
-            auto row = _nextMatchingRow();
-            if (!row) break;
-            last   = *row;
-            lastTs = accumulate(last);
+
+        if (kCSVMapping.timeFormat == TimeFormat::Iso8601) {
+            // ISO-8601 sorts lexicographically, so the window edge is one string and every row is a memcmp
+            std::string targetOwned  = mdDetail::endTimestamp(firstTs, seconds);
+            std::string_view target(targetOwned);
+            std::string_view lastTs = firstTs;
+            while (lastTs < target) {
+                auto row = _nextMatchingRow();
+                if (!row) break;
+                last   = *row;
+                lastTs = accumulate(last);
+            }
+        } else {
+            // epoch / date stamps are compared as numbers
+            const long long target = mdDetail::tsToEpochSeconds(firstTs) + seconds;
+            long long lastSec = mdDetail::tsToEpochSeconds(firstTs);
+            while (lastSec < target) {
+                auto row = _nextMatchingRow();
+                if (!row) break;
+                last    = *row;
+                lastSec = mdDetail::tsToEpochSeconds(accumulate(last));
+            }
         }
 
         // book, quote and action are snapshots, summing them across the bar
@@ -399,6 +631,7 @@ public:
         t.executedBuys  = buys;
         t.executedSells = sells;
         t.unknownVolume = unknown;
+        for (std::size_t i = 0; i < nExtras; ++i) t.extras[i] = extraAcc[i].value(kCSVMapping.extras[i].agg);
         return t;
     }
 
@@ -467,6 +700,9 @@ public:
     // the reader points into _map, moving or copying would leave it dangling
     MarketData(const MarketData&)            = delete;
     MarketData& operator=(const MarketData&) = delete;
+
+    /// @brief rows skipped so far for a missing / non-numeric price or timestamp (CSV only, Parquet reads 0)
+    std::size_t skippedRows() const { return _csv ? _csv->skippedRows() : 0; }
 
     bool skipLine() {
 #ifdef AZBT_PARQUET
