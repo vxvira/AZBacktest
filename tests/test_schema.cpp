@@ -310,5 +310,5 @@ TEST(quotedFieldsWithDelimitersInside) {
 // ---------------------------------------------------------------- version
 
 TEST(versionIsDefined) {
-    CHECK_EQ(std::string(AZBT_VERSION), std::string("1.2.0"));
+    CHECK_EQ(std::string(AZBT_VERSION), std::string("1.2.1"));
 }
