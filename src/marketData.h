@@ -222,9 +222,18 @@ private:
     int _missCount = 0;
     static constexpr int _rollThreshold = 200;
 
+    // next row that passes the symbol filter and, with tradesOnly, is a trade, consumed
+    std::optional<csv::Row> _nextMatchingRow() {
+        while (auto row = _nextSymbolRow()) {
+            if (!kCSVMapping.tradesOnly || kCSVMapping.actionCol < 0) return row;
+            if ((*row)[kCSVMapping.actionCol] == kCSVMapping.actionTradeAlias) return row;
+        }
+        return std::nullopt;
+    }
+
     // next row that passes the configured symbol filter, consumed
     // handles both exact match and rolling contract mode
-    std::optional<csv::Row> _nextMatchingRow() {
+    std::optional<csv::Row> _nextSymbolRow() {
         // an empty symbol means "read the column but don't filter on it"
         if (kCSVMapping.symbolCol < 0 || kCSVMapping.symbol[0] == '\0') return _in.next();
         std::string_view root(kCSVMapping.symbol);

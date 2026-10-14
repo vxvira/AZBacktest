@@ -93,3 +93,53 @@ TEST(nextCloseActionDefaultsToNoneAliasWhenDisabled) {
     CHECK_EQ(bar->action, kCSVMapping.actionNoneAlias);
     CHECK_F(bar->size, 17.0); // aggregation still works
 }
+
+// ---------------------------------------------------------------- tradesOnly
+
+// basicTicks() has exactly one T row (5001.00, size 5), every other row is a book event
+TEST(tradesOnlyNextTickSkipsEveryNonTradeRow) {
+    useFixtureMapping();
+    kCSVMapping.tradesOnly = true;
+    TempCsv csv(azt::basicTicks());
+    MarketData md(csv.path());
+
+    auto t = md.nextTick();
+    REQUIRE(t.has_value());
+    CHECK_EQ(t->action, kCSVMapping.actionTradeAlias);
+    CHECK_F(t->size, 5.f);
+    CHECK(!md.nextTick().has_value());
+}
+
+// the reason the flag exists: an add resting far from the market is a book event, not a print, so it
+// must not stretch the bar's range or add to its volume
+TEST(tradesOnlyBarRangeAndVolumeComeFromTradesOnly) {
+    useFixtureMapping();
+    kCSVMapping.tradesOnly = true;
+    TempCsv csv(std::string(azt::kFixtureHeader) +
+        "2025-06-01T22:00:00.000000000Z,ESM5,100.00,1,B,1,1,99.75,100.25,T\n"
+        "2025-06-01T22:00:10.000000000Z,ESM5,500.00,9,B,1,1,99.75,100.25,A\n"
+        "2025-06-01T22:00:20.000000000Z,ESM5,102.00,2,B,1,1,99.75,100.25,T\n"
+        "2025-06-01T22:00:30.000000000Z,ESM5,50.00,9,A,1,1,99.75,100.25,C\n");
+    MarketData md(csv.path());
+
+    auto bar = md.nextClose(60);
+    REQUIRE(bar.has_value());
+    CHECK_F(bar->open, 100.f);
+    CHECK_F(bar->high, 102.f);
+    CHECK_F(bar->low, 100.f);
+    CHECK_F(bar->size, 3.f);
+    CHECK_EQ(bar->action, kCSVMapping.actionTradeAlias);
+}
+
+// no actionCol means there is nothing to filter on, so the flag is ignored rather than dropping every row
+TEST(tradesOnlyIsIgnoredWithoutAnActionColumn) {
+    useFixtureMapping();
+    kCSVMapping.tradesOnly = true;
+    kCSVMapping.actionCol  = -1;
+    TempCsv csv(azt::basicTicks());
+    MarketData md(csv.path());
+
+    int rows = 0;
+    while (md.nextTick()) rows++;
+    CHECK_EQ(rows, 6);
+}

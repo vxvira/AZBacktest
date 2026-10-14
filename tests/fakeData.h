@@ -132,6 +132,7 @@ inline void useFixtureMapping() {
     kCSVMapping.bidCountCol   = -1;
     kCSVMapping.askCountCol   = -1;
     kCSVMapping.instrumentCol = -1;
+    kCSVMapping.tradesOnly    = false;
 
     kCSVMapping.commision  = 0.f;
     kCSVMapping.spread     = 0.f;

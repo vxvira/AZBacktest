@@ -126,6 +126,11 @@ actionFillAlias   = "F"
 actionClearAlias  = "R"
 actionNoneAlias   = "N"
 
+# CSV only: skip every row whose action isn't actionTradeAlias (needs actionCol)
+# on MBP schemas every add/cancel/modify is a row and its price is a resting
+# order's, so bar highs/lows/volume are only real trades with this on
+tradesOnly = false
+
 # trading costs (all in pts)
 commission = 0.0
 spread     = 0.0

@@ -98,6 +98,11 @@ struct CSVMapping {
     int bidCountCol   = -1;
     int askCountCol   = -1;
     int instrumentCol = -1;
+
+    // CSV only. when true (and actionCol is mapped) rows whose action isn't actionTradeAlias are skipped
+    // before anything sees them. on MBP-1 every add/cancel/modify is a row and its price is a resting
+    // order's, so without this bar highs/lows, volume and the closing price are built from book events
+    bool tradesOnly = false;
 };
 
 // persistent string storage so const char* fields stay valid
@@ -205,6 +210,11 @@ actionFillAlias = "F"
 actionClearAlias = "R"
 actionNoneAlias = "N"
 
+# CSV only: skip every row whose action isn't actionTradeAlias (needs actionCol)
+# MBP rows are book events, their price is a resting order's, not a trade's, so
+# bar highs/lows/volume are only meaningful with this on
+tradesOnly = false
+
 # extra MBP columns, set to -1 to disable
 # on Databento MBP-1: flags(10), bid_ct_00(17), ask_ct_00(18), instrument_id(4)
 flagsCol      = -1
@@ -309,6 +319,7 @@ inline void loadConfig(const char* tomlPath = "config.toml") {
     kCSVMapping.actionClearAlias = cfgDetail::actionClearAliasStr.c_str();
     cfgDetail::actionNoneAliasStr = toml::getString(cfg, "", "actionNoneAlias", "N");
     kCSVMapping.actionNoneAlias = cfgDetail::actionNoneAliasStr.c_str();
+    kCSVMapping.tradesOnly = toml::getBool(cfg, "", "tradesOnly", false);
 
     kCSVMapping.flagsCol      = toml::getInt(cfg, "", "flagsCol", -1);
     kCSVMapping.bidCountCol   = toml::getInt(cfg, "", "bidCountCol", -1);
