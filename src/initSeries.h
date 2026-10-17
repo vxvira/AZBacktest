@@ -9,6 +9,7 @@ using seriesPool::addScatter;
 using seriesPool::addErrorBars;
 using seriesPool::addXYBars;
 using seriesPool::addXYScatter;
+using seriesPool::addXYLine;
 using seriesPool::addHeatmap;
 using seriesPool::initSeriesPool;
 using statPool::addStat;

@@ -46,7 +46,8 @@ inline Series buildColumnChild(seriesPool::NamedSeries& s, int col, bool onY2) {
 
 /// @brief build a panel child for an xyBars pool series (histogram-style)
 inline Series buildXYChild(seriesPool::NamedSeries& s, bool onY2) {
-    Series c{s.type == 3 ? Scatter : Bar, s.name, s.data[1], false, s.color, false, onY2, s.data[0], s.barWidth};
+    SeriesKind kind = s.type == 3 ? Scatter : s.type == 0 ? Line : Bar;
+    Series c{kind, s.name, s.data[1], false, s.color, false, onY2, s.data[0], s.barWidth};
     copyStyle(s, c);
     c.sourceSeries = s.name;
     c.sourceXY = true;
@@ -214,8 +215,12 @@ inline void renderPanels() {
                             ImPlot::PlotErrorBars(c.label.c_str(), xs.data(), c.data.data(), c.errors.data(), n);
                         }
                     }
-                    else if (c.kind == Line)
-                        ImPlot::PlotLine(c.label.c_str(), c.data.data(), (int)c.data.size());
+                    else if (c.kind == Line) {
+                        if (!c.xs.empty())   // explicit x per point, e.g. a best-fit segment
+                            ImPlot::PlotLine(c.label.c_str(), c.xs.data(), c.data.data(), (int)c.data.size());
+                        else
+                            ImPlot::PlotLine(c.label.c_str(), c.data.data(), (int)c.data.size());
+                    }
                     else if (!c.xs.empty())
                         ImPlot::PlotBars(c.label.c_str(), c.xs.data(), c.data.data(), (int)c.data.size(), c.barWidth);
                     else

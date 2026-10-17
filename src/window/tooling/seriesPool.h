@@ -255,6 +255,25 @@ NamedSeries& addXYScatter(std::string name, std::vector<Tx> xs, std::vector<Ty> 
     return pool.back();
 }
 
+/// @brief (x,y) line, ys[i] goes at xs[i] instead of its index
+/// good for throwing a curve (pdf, fit, whatever) over xy bars or a scatter
+/// @param name  display name
+/// @param xs    x-coordinate per point, ascending
+/// @param ys    y-coordinate per point, same length as xs
+/// @param color optional RGBA color
+/// @param onY2  default axis when added to a panel
+template<typename Tx, typename Ty,
+         typename = std::enable_if_t<std::is_arithmetic_v<Tx> && std::is_arithmetic_v<Ty>>>
+NamedSeries& addXYLine(std::string name, std::vector<Tx> xs, std::vector<Ty> ys,
+                  RGBA color = {}, bool onY2 = false) {
+    std::vector<double> xf(xs.begin(), xs.end());
+    std::vector<double> yf(ys.begin(), ys.end());
+    NamedSeries s{std::move(name), {std::move(xf), std::move(yf)}, {}, parseSeriesType("line"), resolveColor(color), onY2};
+    s.xyBars = true;
+    pool.push_back(std::move(s));
+    return pool.back();
+}
+
 /// @brief add a line series with error bars to the pool
 /// @param name   display name
 /// @param values center values per point
