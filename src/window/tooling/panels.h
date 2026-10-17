@@ -275,6 +275,8 @@ inline std::vector<std::string> splitPipe(const std::string& s) {
 }
 
 inline void* iniReadOpen(ImGuiContext*, ImGuiSettingsHandler*, const char* name) {
+    // already exists = addPanel made it before the ini loaded, keep that one or the saved children stack up every run
+    if (findPanel(name)) return nullptr;
     newPanel(name);
     return (void*)findPanel(name);
 }

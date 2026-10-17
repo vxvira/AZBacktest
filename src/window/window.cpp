@@ -57,6 +57,32 @@ void newBarSeries(std::string panelId) {
     if (panel) panel->children.push_back({panelManagement::Bar, "", {}, true});
 }
 
+/// @brief make a panel from pool series before the console opens, so a study
+/// lays out its own charts instead of you clicking them together every run
+/// @param panelId panel id, also the plot title and the tiling key "panel_<id>"
+/// @param series  pool series names, every column gets added, unknown ones get skipped
+void addPanel(const std::string& panelId, const std::vector<std::string>& series) {
+    panelManagement::newPanel(panelId);
+    auto* panel = panelManagement::findPanel(panelId);
+    for (auto& name : series) {
+        auto* s = seriesPool::findSeries(name);
+        if (!s) { std::cerr << "addPanel: no series called \"" << name << "\"\n"; continue; }
+        if (s->xyBars) panel->children.push_back(panelManagement::buildXYChild(*s, s->onY2));
+        else for (int col = 0; col < s->cols(); col++)
+            panel->children.push_back(panelManagement::buildColumnChild(*s, col, s->onY2));
+    }
+}
+
+/// @brief widget window with a stat explorer showing every stat logged so far
+/// @param id window id, tiling key is "widget_<id>"
+void addStatWidget(const std::string& id) {
+    widgetManagement::newWindow(id);
+    auto* w = widgetManagement::findWindow(id);
+    widgetManagement::Widget widget{widgetManagement::StatisticExplorer, "Statistic Explorer"};
+    for (int i = 0; i < (int)statPool::pool.size(); i++) widget.selectedStatIdxs.push_back(i);
+    w->children.push_back(widget);
+}
+
 ///@}
 
 ///@name Tiling API

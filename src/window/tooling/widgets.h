@@ -212,6 +212,8 @@ inline void renderWindows() {
 }
 
 inline void* iniReadOpen(ImGuiContext*, ImGuiSettingsHandler*, const char* name) {
+    // same deal as panels, addStatWidget's window keeps its own stuff
+    if (findWindow(name)) return nullptr;
     newWindow(name);
     return (void*)findWindow(name);
 }

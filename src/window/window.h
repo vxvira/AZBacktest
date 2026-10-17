@@ -1,7 +1,11 @@
 #pragma once
 #include <string>
+#include <vector>
 
 void showConsole(const char* title, void (skin)());
+
+void addPanel(const std::string& id, const std::vector<std::string>& series);
+void addStatWidget(const std::string& id);
 
 void setTiling(bool on);
 void setTileGrid(int cols, int rows);
