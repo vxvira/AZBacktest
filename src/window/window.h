@@ -3,6 +3,7 @@
 #include <vector>
 
 void showConsole(const char* title, void (skin)());
+void setIniFile(const std::string& path);
 
 void addPanel(const std::string& id, const std::vector<std::string>& series);
 void addStatWidget(const std::string& id);

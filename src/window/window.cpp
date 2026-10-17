@@ -85,6 +85,9 @@ void addStatWidget(const std::string& id) {
 
 ///@}
 
+/// @brief use your own layout file instead of the shared imgui.ini, call before showConsole
+void setIniFile(const std::string& path) { windowManagement::iniFile = path; }
+
 ///@name Tiling API
 ///@{
 

@@ -7,9 +7,14 @@
 #include "backends/imgui_impl_glfw.h"
 #include "backends/imgui_impl_opengl3.h"
 
+#include <string>
+
 #include "../../skins/skinVars.h" // skins::gridStepX/Y / gridColor / baseColor
 
 namespace windowManagement {
+
+/// @brief layout file the console loads/saves, point a study at its own so it doesnt drag in every old panel from the shared one
+inline std::string iniFile = "imgui.ini";
 
 inline GLFWwindow* createWindow(void (skin)()) {
     glfwInit();
@@ -26,6 +31,7 @@ inline GLFWwindow* createWindow(void (skin)()) {
 
     ImGui::CreateContext();
     ImPlot::CreateContext();
+    ImGui::GetIO().IniFilename = iniFile.c_str();
     skin();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 150");
