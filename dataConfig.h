@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -406,6 +407,10 @@ box             = true
 inline void loadConfig(const char* tomlPath = "config.toml") {
     if (cfgDetail::loaded) return;
     cfgDetail::loaded = true;
+
+    // drop a stale layout file, error_code overload so a missing/locked file doesnt throw
+    std::error_code ec;
+    std::filesystem::remove("imgui.ini", ec);
 
     {
         std::ifstream check(tomlPath);
