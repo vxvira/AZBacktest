@@ -18,7 +18,7 @@ TEST(shortProfitIsInPoints) {
 
 TEST(closedTradeKeepsPoints) {
     std::vector<double> prices{5000.0};
-    TradeApi h(prices, 0.25, 0.50, false);
+    TradeApi h(prices, 0.25, 0.50);
     h.openLong(0);
     prices.back() = 5012.5;
     h.tick(1);

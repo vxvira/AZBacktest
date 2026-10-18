@@ -65,7 +65,7 @@ public:
             std::size_t i;
             Bar operator*() const {
                 bt->prices.assign(1, w->prices[i]);
-                bt->trade.tick(w->tsRecv[i]);
+                bt->trade.tick(w->tsRecv[i], w->volumes[i]);
                 return Bar(*w, i);
             }
             It& operator++() { ++i; return *this; }
