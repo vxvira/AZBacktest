@@ -52,8 +52,8 @@ int main() {
             tradeApi.tick(window.tsRecv[b]);
 
             // risk first, so a runner gets cut before any signal work
-            if (tradeApi.openTrade) {
-                const double pnl = tradeApi.openTrade->td.profit;
+            if (!tradeApi.openTrades.empty()) {
+                const double pnl = tradeApi.openTrades[0].td.profit;
                 if (pnl >= takeProfit || pnl <= -stopLoss) tradeApi.closeTrade();
             }
 

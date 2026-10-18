@@ -147,8 +147,8 @@ TEST(barsSetThePriceAndTickTheTrade) {
         i++;
     }
     CHECK(seenPrice == (std::vector<double>{100, 104, 110}));
-    REQUIRE(bt.trade.openTrade.has_value());
-    CHECK_F(bt.trade.openTrade->td.profit, 10.f); // marked to the last bar
+    REQUIRE(!bt.trade.openTrades.empty());
+    CHECK_F(bt.trade.openTrades[0].td.profit, 10.f); // marked to the last bar
     CHECK_EQ(bt.trade.lastEpochSec, kBase + 120);
 }
 
@@ -163,7 +163,7 @@ TEST(eachWindowClosesTheOpenTradeAtTheEnd) {
                   [&](const DataWindow& cur, const DataWindow&) {
         for (auto b : bt.bars(cur)) if (b.i == 0) bt.trade.openLong(0);
     });
-    CHECK(!bt.trade.openTrade.has_value());
+    CHECK(bt.trade.openTrades.empty());
     CHECK_EQ((int)bt.trade.info.trades.size(), 1);
 }
 

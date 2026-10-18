@@ -13,17 +13,22 @@ private:
     bool _lockTrade = false; // Locks trade data in + appends to vec
 
 public:
+    bool isLimit;
+
     /// @brief opens a trade at `entryPrice` in the given direction
     /// @param entryPrice price at which the trade was opened (snapshot; no reference)
     /// @param entryIdx bar index where the trade was opened (for your own bookkeeping)
     /// @param direction Long or Short, flips the sign on P&L
-    Trade(double entryPrice, int entryIdx, double tickSize, double tickValue, TradesInfo::TradeDirection direction)
+    Trade(double entryPrice, int entryIdx, double tickSize, double tickValue, TradesInfo::TradeDirection direction, bool isLimit = false)
         : _entryPrice(entryPrice)
         , _tickValue(tickValue)
         , _tickSize(tickSize)
         , _entryIdx(entryIdx)
         , _direction(direction)
+        , isLimit(isLimit)
     {}
+
+    TradesInfo::TradeDirection direction() const { return _direction; }
 
     TradesInfo::tradeData td;
 

@@ -274,17 +274,35 @@ class TradeApi {
     double _tickSize;
     double _tickValue;
 
-    bool _calculateCosts;
+    struct Order { int dir; int idx; double price; double queue; double seen; bool limit; std::chrono::steady_clock::time_point at; };
+    std::vector<Order> _orders;
 
-    void newLong(int idx) {
-        openTrade.emplace(_prices.back(), idx, _tickSize, _tickValue, TradesInfo::TradeDirection::Long);
-        inLong = true;
+    void fillOrders(double vol) {
+        const auto now = std::chrono::steady_clock::now();
+        const double px = _prices.back();
+        _orders.erase(std::remove_if(_orders.begin(), _orders.end(), [&](Order& o) {
+            if (std::chrono::duration<double, std::milli>(now - o.at).count() < kCSVMapping.timingCost) return false;
+            double fillPx = px;
+            if (o.limit) {
+                const double through = (o.price - px) * o.dir;
+                if (through < 0) return false;
+                if (through == 0 && (o.seen += vol) <= o.queue) return false;
+                fillPx = o.price;
+            }
+            openTrades.emplace_back(fillPx, o.idx, _tickSize, _tickValue,
+                o.dir == 1 ? TradesInfo::TradeDirection::Long : TradesInfo::TradeDirection::Short, o.limit);
+            (o.dir == 1 ? inLong : inShort) = true;
+            return true;
+        }), _orders.end());
     }
 
-    void newShort(int idx) {
-        openTrade.emplace(_prices.back(), idx, _tickSize, _tickValue, TradesInfo::TradeDirection::Short);
-        inShort = true;
+    int addOrder(int dir, int idx, bool limit, double price = 0, double queue = 0) {
+        if ((!canOverlap && !_orders.empty()) || !legalEntry(dir)) return 0;
+        _orders.push_back({dir, idx, price, queue, 0, limit, std::chrono::steady_clock::now()});
+        fillOrders(0);
+        return 1;
     }
+
 
 public:
     /// @brief bind `prices` (by reference, caller must keep it alive) and the
@@ -292,11 +310,11 @@ public:
     /// @param prices    live price window; TradeApi reads `.back()` at each entry
     /// @param tickSize  instrument tick size, forwarded to Trade
     /// @param tickValue instrument tick value, forwarded to Trade
-    TradeApi(std::vector<double>& prices, double tickSize, double tickValue, bool calculateCosts = true)
-        : _prices(prices), _tickSize(tickSize), _tickValue(tickValue), _calculateCosts(calculateCosts) {}
+    TradeApi(std::vector<double>& prices, double tickSize, double tickValue)
+        : _prices(prices), _tickSize(tickSize), _tickValue(tickValue) {}
 
     // Trade management
-    std::optional<Trade> openTrade;
+    std::vector<Trade> openTrades;
     TradesInfo info; // closed trades + equity curve, hand this to PnlAnalytics
     bool inLong = false;
     bool inShort = false;
@@ -318,64 +336,37 @@ public:
             if (inShort && canOverlap) return true; 
             return false;
         }
+        std::cerr << "Illegal direction passed to `legalEntry(int dir). Takes -1 for short, 1 for long" << std::endl;
+        return false;
     }
 
-    // queued entry, fills on the first tick once timingCost ms of wall time have passed
-    int _pendingDir = 0, _pendingIdx = 0;
-    std::chrono::steady_clock::time_point _pendingAt;
+    int openLong(int idx) { return addOrder(1, idx, false); }
+    int openShort(int idx) { return addOrder(-1, idx, false); }
 
-    void fillPending() {
-        if (!_pendingDir || std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - _pendingAt).count() < kCSVMapping.timingCost) return;
-        if (_pendingDir == 1) newLong(_pendingIdx); else newShort(_pendingIdx);
-        _pendingDir = 0;
+    /// @brief limit order, fills at `price` once price trades through it, or once more than `queue` volume trades at it
+    int placeLongLimit(int idx, double price, double queue = 0) { return addOrder(1, idx, true, price, queue); }
+    int placeShortLimit(int idx, double price, double queue = 0) { return addOrder(-1, idx, true, price, queue); }
+
+    void closeTrade(std::size_t i = 0) {
+        if (i >= openTrades.size()) return;
+        Trade& t = openTrades[i];
+        t.td.closeEpochSec = lastEpochSec;
+        info.realizedProfit += t.td.profit - kCSVMapping.commision - (t.isLimit ? kCSVMapping.spread : 0);
+        info.trades.push_back(t.lockTrade());
+        openTrades.erase(openTrades.begin() + i);
+        inLong = inShort = false;
+        for (auto& o : openTrades) (o.direction() == TradesInfo::TradeDirection::Long ? inLong : inShort) = true;
     }
 
-    /// @brief queue a long, returns 1 if queued, 0 if it wasnt legal
-    /// @param idx bar index for bookkeeping
-    int openLong(int idx) {
-        if (_pendingDir || !legalEntry(1)) return 0;
-        _pendingDir = 1; _pendingIdx = idx; _pendingAt = std::chrono::steady_clock::now();
-        fillPending();
-        return 1;
-    }
-
-    /// @brief queue a short, same rules as openLong
-    int openShort(int idx) {
-        if (_pendingDir || !legalEntry(-1)) return 0;
-        _pendingDir = -1; _pendingIdx = idx; _pendingAt = std::chrono::steady_clock::now();
-        fillPending();
-        return 1;
-    }
-
-    /// @brief close the current open trade, stamps it with the last timestamp,
-    /// locks the P&L, and resets position state
-    void closeTrade() {
-        if (!openTrade) return; // nothing open, nothing to close
-        // TODO - Overlapping trades support
-        openTrade->td.closeEpochSec = lastEpochSec;
-        
-        if (_calculateCosts) info.realizedProfit += (openTrade->td.profit - (kCSVMapping.commision + kCSVMapping.spread + kCSVMapping.timingCost));
-        else info.realizedProfit += openTrade->td.profit;
-
-        info.trades.push_back(openTrade->lockTrade()); openTrade.reset(); inLong=false; inShort=false;
-    }
-
-    /// @brief close everything, call this at end-of-data so you don't
-    /// leave a dangling open trade
     void closeAll() {
-        if (openTrade) closeTrade();
+        while (!openTrades.empty()) closeTrade();
     }
 
-    /// @brief advance the open trade's P&L to the current price and (optionally)
-    /// record an equity curve sample, call this once per tick/bar
-    /// @param timestamp if non-empty, gets parsed and used to stamp equity
-    /// curve entries + trade close times, leave blank if you don't care about time
-    // returns state directly if you want ownership at whatever time
-    std::pair<bool,bool> tick(long long epochSec) {
-        fillPending();
-        if (openTrade) openTrade->advanceIdx(_prices.back());
+    std::pair<bool,bool> tick(long long epochSec, double vol = 0.0) {
+        fillOrders(vol);
+        double unreal = 0.0;
+        for (auto& t : openTrades) { t.advanceIdx(_prices.back()); unreal += t.td.profit; }
         lastEpochSec = epochSec;
-        double unreal = openTrade ? openTrade->td.profit : 0.0;
         double eq = info.realizedProfit + unreal;
         if (!info.equityCurve.empty() && info.equityCurve.back().first == epochSec) {
             info.equityCurve.back().second = eq;
@@ -385,13 +376,13 @@ public:
         return {inLong, inShort};
     }
 
-    std::pair<bool,bool> tick(std::string_view timestamp = {}) {
+    std::pair<bool,bool> tick(std::string_view timestamp = {}, double vol = 0.0) {
         if (timestamp.empty()) {
-            fillPending();
-            if (openTrade) openTrade->advanceIdx(_prices.back());
+            fillOrders(vol);
+            for (auto& t : openTrades) t.advanceIdx(_prices.back());
             return {inLong, inShort};
         }
-        return tick(mdDetail::tsToEpochSeconds(timestamp));
+        return tick(mdDetail::tsToEpochSeconds(timestamp), vol);
     }
 
     std::vector<TradesInfo::tradeData> returnTradesVector() { return info.trades; }
