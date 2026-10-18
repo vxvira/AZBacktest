@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <string>
 #include <string_view>
@@ -9,6 +10,7 @@
 #include <optional>
 #include <utility>
 #include <stdexcept>
+#include "tooling.h"
 #include "dataManagement/data.h"
 #include "tradeManagement/tradesApi.h"
 #include "../marketData.h"
@@ -303,23 +305,46 @@ public:
 
     long long lastEpochSec = 0; // most recent timestamp fed to tick(); stamped onto trades at close
 
-    /// @brief open a long at the current price, returns 1 if it opened, 0 if
-    /// already in a long (unless canOverlap is set)
-    /// @param idx bar index for bookkeeping
-    int openLong(int idx) {
-        if (inShort) return 0; // would drop the open short without ever closing it
-        if (!inLong)              { newLong(idx);  return 1; }
-        if (inLong && canOverlap) { newLong(idx);  return 1; }
-        return 0;
+    bool legalEntry(int dir) {
+        if (dir == 1) {
+            if (inShort) return false;
+            if (!inLong) return true;
+            if (inLong && canOverlap) return true;
+            return false;
+        }
+        if (dir == -1) {
+            if (inLong) return false;
+            if (!inShort) return true;
+            if (inShort && canOverlap) return true; 
+            return false;
+        }
     }
 
-    /// @brief open a short at the current price, same rules as openLong
+    // queued entry, fills on the first tick once timingCost ms of wall time have passed
+    int _pendingDir = 0, _pendingIdx = 0;
+    std::chrono::steady_clock::time_point _pendingAt;
+
+    void fillPending() {
+        if (!_pendingDir || std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - _pendingAt).count() < kCSVMapping.timingCost) return;
+        if (_pendingDir == 1) newLong(_pendingIdx); else newShort(_pendingIdx);
+        _pendingDir = 0;
+    }
+
+    /// @brief queue a long, returns 1 if queued, 0 if it wasnt legal
     /// @param idx bar index for bookkeeping
+    int openLong(int idx) {
+        if (_pendingDir || !legalEntry(1)) return 0;
+        _pendingDir = 1; _pendingIdx = idx; _pendingAt = std::chrono::steady_clock::now();
+        fillPending();
+        return 1;
+    }
+
+    /// @brief queue a short, same rules as openLong
     int openShort(int idx) {
-        if (inLong) return 0; // same deal as openLong, don't clobber the long
-        if (!inShort)              { newShort(idx); return 1; }
-        if (inShort && canOverlap) { newShort(idx); return 1; }
-        return 0;
+        if (_pendingDir || !legalEntry(-1)) return 0;
+        _pendingDir = -1; _pendingIdx = idx; _pendingAt = std::chrono::steady_clock::now();
+        fillPending();
+        return 1;
     }
 
     /// @brief close the current open trade, stamps it with the last timestamp,
@@ -347,6 +372,7 @@ public:
     /// curve entries + trade close times, leave blank if you don't care about time
     // returns state directly if you want ownership at whatever time
     std::pair<bool,bool> tick(long long epochSec) {
+        fillPending();
         if (openTrade) openTrade->advanceIdx(_prices.back());
         lastEpochSec = epochSec;
         double unreal = openTrade ? openTrade->td.profit : 0.0;
@@ -361,6 +387,7 @@ public:
 
     std::pair<bool,bool> tick(std::string_view timestamp = {}) {
         if (timestamp.empty()) {
+            fillPending();
             if (openTrade) openTrade->advanceIdx(_prices.back());
             return {inLong, inShort};
         }

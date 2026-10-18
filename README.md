@@ -206,10 +206,12 @@ lowCol  = -1
 # symbol = "!~-"     # drop calendar spreads like NQU6-NQZ6
 # price  = ">0"
 
-# trading costs (all in pts)
+# trading costs, pts
 commission = 0.0
 spread     = 0.0
-timingCost = 0.0
+
+# ms of delay
+timingCost = 0
 
 # substring offsets for pulling Y/M/D out of the timestamp column
 # defaults match Databento's ISO-8601 format: 2025-06-01T22:00:00.065308005Z

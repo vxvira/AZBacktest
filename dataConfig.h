@@ -124,7 +124,8 @@ struct CSVMapping {
 
     double commision;                                 // commision, pts
     double spread;                                    // spread, pts
-    double timingCost;                                // how much do you lose from latency? (pts)
+
+    double timingCost;                                // artificial fill day, ms
 
     // extra MBP columns, all defaulted off (-1). on Databento MBP-1 these are
     // flags(10) (128 = F_LAST, the last record of an exchange packet),
@@ -361,10 +362,12 @@ bidCountCol   = -1
 askCountCol   = -1
 instrumentCol = -1
 
-# trading costs (all in pts)
+# trading costs, pts
 commission = 0.0
 spread     = 0.0
-timingCost = 0.0
+
+# ms of delay on fills
+timingCost = 0
 
 # any number of extra numeric columns carried through to DataWindow::extras, read with w.extra("name")
 # "column" or "column:agg", agg folds them into a bar: last (default) first sum min max mean
@@ -520,6 +523,7 @@ inline void loadConfig(const char* tomlPath = "config.toml") {
 
     kCSVMapping.commision  = toml::getFloat(cfg, "", "commission", 0.f);
     kCSVMapping.spread     = toml::getFloat(cfg, "", "spread", 0.f);
+
     kCSVMapping.timingCost = toml::getFloat(cfg, "", "timingCost", 0.f);
 
     // missing keys (or a config from before [matplot] existed) keep matplot's defaults
