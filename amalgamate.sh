@@ -147,6 +147,7 @@ STB_TRUETYPE="$SCRIPT_DIR/vendor/imgui/imstb_truetype.h"
 STB_TEXTEDIT="$SCRIPT_DIR/vendor/imgui/imstb_textedit.h"
 GL3W_LOADER="$SCRIPT_DIR/vendor/imgui/backends/imgui_impl_opengl3_loader.h"
 PARQUET_MD="$SCRIPT_DIR/src/parquetMarketData.h"
+DUCKDB_MD="$SCRIPT_DIR/src/duckdbMarketData.h"
 
 for f in "${FILES[@]}"; do
     rel="${f#$SCRIPT_DIR/}"
@@ -186,6 +187,7 @@ for f in "${FILES[@]}"; do
             # need as the STB libs above, just for our own header instead of
             # a vendored one
             inline_stb "$f" '#include "parquetMarketData.h"' "$PARQUET_MD" \
+                | inline_stb - '#include "duckdbMarketData.h"' "$DUCKDB_MD" \
                 | sed -E '/^#pragma once/d; /^[[:space:]]*#include[[:space:]]*"/d' >> "$OUT"
             ;;
         *)

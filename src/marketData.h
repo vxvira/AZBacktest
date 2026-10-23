@@ -246,6 +246,8 @@ inline const char* classifyAction(std::string_view actionView) {
 // mdDetail::* from above, so it's included here rather than from the top of
 // this file. A no-op include when AZBT_PARQUET isn't defined.
 #include "parquetMarketData.h"
+// same idea for DuckDB (_DuckdbCsv, AZBT_DUCKDB), it only exports to a scratch CSV so it just needs kCSVMapping
+#include "duckdbMarketData.h"
 
 /// @brief csv options for market data files, the header flag comes from
 /// kCSVMapping.skipHeader so a headerless file reads its first row as data
@@ -671,6 +673,9 @@ inline bool isParquetPath(const std::string& path) {
 /// valid until the next call on this MarketData instance.
 class MarketData {
 private:
+#ifdef AZBT_DUCKDB
+    std::unique_ptr<_DuckdbCsv> _duck; // scratch CSV behind a DuckDB source, declared first so it's deleted after _map lets go of it
+#endif
     csv::MappedFile _map; // declared before _csv so it outlives the reader pointing into it
     std::unique_ptr<_MarketData> _csv;
 #ifdef AZBT_PARQUET
@@ -690,6 +695,16 @@ public:
                 "MarketData: " + path + " is a .parquet file, but this build has no "
                 "Parquet support (Arrow wasn't found when it was built). Install it with "
                 "`brew install apache-arrow` and rebuild.");
+#endif
+        } else if (mdDetail::isDuckdbPath(path)) {
+#ifdef AZBT_DUCKDB
+            _duck = std::make_unique<_DuckdbCsv>(path, kCSVMapping.skipHeader);
+            _map = csv::MappedFile(_duck->path());
+            _csv = std::make_unique<_MarketData>(_map.data(), _map.size());
+#else
+            throw std::runtime_error(
+                "MarketData: " + path + " is a DuckDB file, but this build has no DuckDB "
+                "support (the library wasn't found when it was built). Install DuckDB and rebuild, see build.sh.");
 #endif
         } else {
             _map = csv::MappedFile(path);

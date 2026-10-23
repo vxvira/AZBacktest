@@ -67,7 +67,7 @@ struct CSVMapping {
     int priceCol;
     int sizeCol;
 
-    // absolute path to the data file (CSV or Parquet)
+    // absolute path to the data file (CSV, Parquet or DuckDB)
     // use an absolute path so it resolves correctly regardless of
     // which directory the binary runs from
     const char* path;
@@ -279,7 +279,7 @@ inline void generateDefaultConfig(const char* tomlPath) {
 R"(# AZBacktest configuration
 # fill in your column mapping and data path, then rebuild
 
-# absolute path to the data file (CSV or Parquet)
+# absolute path to the data file (CSV, Parquet or DuckDB)
 path = "PLACEHOLDER"
 
 # column indices (0-indexed)

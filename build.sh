@@ -58,10 +58,35 @@ if [[ $CLEAN -eq 1 ]]; then
     while IFS= read -r -d '' f; do
         rm -f "$f"
         count=$((count + 1))
-    done < <(find "$PROJECT_ROOT" \( -name '.build_*.exe' -o -name '.azt_test_*.csv' \) -type f -print0)
+    done < <(find "$PROJECT_ROOT" \( -name '.build_*.exe' -o -name '.azt_test_*.csv' -o -name '.azt_test_*.duckdb*' \) -type f -print0)
     echo "removed $count build artifact(s)"
     exit 0
 fi
+
+# DuckDB (the .duckdb / .ddb data source). sets DUCKDB_FLAGS to -DAZBT_DUCKDB plus include / link flags
+# when duckdb.h + the library are found, leaves it empty otherwise. only the C API is used so any
+# compiler's build of the library works. Windows MinGW: pacman -S mingw-w64-x86_64-duckdb,
+# macOS: brew install duckdb
+find_duckdb() {
+    DUCKDB_FLAGS=()
+    local prefix=""
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        for p in /opt/homebrew /usr/local; do
+            if [[ -f "$p/include/duckdb.h" ]] && ls "$p"/lib/libduckdb* >/dev/null 2>&1; then prefix="$p"; break; fi
+        done
+    else
+        local root
+        root="$(command -v g++ 2>/dev/null)" && root="$(dirname "$(dirname "$root")")"
+        for p in "$root" /mingw64 /usr /usr/local; do
+            if [[ -n "$p" && -f "$p/include/duckdb.h" ]] && ls "$p"/lib/libduckdb* >/dev/null 2>&1; then prefix="$p"; break; fi
+        done
+    fi
+    if [[ -n "$prefix" ]]; then
+        DUCKDB_FLAGS=(-DAZBT_DUCKDB -I"$prefix/include" -L"$prefix/lib" -lduckdb)
+    else
+        echo "Note: building without DuckDB support (not found). .duckdb data files won't work until you install it" >&2
+    fi
+}
 
 # Build and run the unit tests. Each tests/test_*.cpp becomes its own binary
 # rather than one linked suite, because backtestApi.h declares `trades`,
@@ -69,8 +94,8 @@ fi
 # both include it would collide at link time. Separate binaries also keep the
 # global kCSVMapping from leaking between files.
 #
-# CSV-only: the fixtures are generated CSVs, so nothing here needs Arrow and the
-# Parquet backend isn't exercised.
+# the fixtures are generated CSVs, so nothing here needs Arrow and the
+# Parquet backend isn't exercised. DuckDB is linked in when found, test_duckdb skips itself otherwise.
 if [[ $TESTS -eq 1 ]]; then
     TEST_DIR="$PROJECT_ROOT/tests"
     if [[ ! -d "$TEST_DIR" ]]; then
@@ -87,6 +112,7 @@ if [[ $TESTS -eq 1 ]]; then
     fi
 
     cd "$PROJECT_ROOT" # fixtures are written relative to the working directory
+    find_duckdb
 
     suites_run=0
     suites_failed=0
@@ -99,7 +125,7 @@ if [[ $TESTS -eq 1 ]]; then
         # broke instead of dying with a bare g++ error
         # imgui is only there for headers, seriesPool -> skinVars wants ImVec4
         if ! g++ -std=c++17 -I"$PROJECT_ROOT" -I"$PROJECT_ROOT/vendor/imgui" -DAZT_SUITE_NAME="\"$suite\"" \
-                 "$tf" -o "$exe"; then
+                 "$tf" -o "$exe" "${DUCKDB_FLAGS[@]}"; then
             echo "  BUILD FAILED  $suite"
             echo ""
             suites_failed=$((suites_failed + 1))
@@ -122,7 +148,7 @@ if [[ $TESTS -eq 1 ]]; then
     done
 
     # sweep any fixture a crashed test didn't get to clean up itself
-    rm -f "$PROJECT_ROOT"/.azt_test_*.csv
+    rm -f "$PROJECT_ROOT"/.azt_test_*.csv "$PROJECT_ROOT"/.azt_test_*.duckdb*
 
     if [[ $suites_failed -eq 0 ]]; then
         echo "all $suites_run suite(s) passed"
@@ -375,8 +401,15 @@ if [[ $uses_parquet -eq 1 ]]; then
     fi
 fi
 
+uses_duckdb=0
+for f in "${SCANNED[@]}"; do
+    if grep -q 'AZBT_DUCKDB' "$f" 2>/dev/null; then uses_duckdb=1; break; fi
+done
+DUCKDB_FLAGS=()
+[[ $uses_duckdb -eq 1 ]] && find_duckdb
+
 OUT_EXE="$FILE_DIR/.build_$$.exe"
-g++ -std="$CXX_STD" -I"$PROJECT_ROOT" "${EXTRA_DEFINES[@]}" "${EXTRA_INCLUDES[@]}" "$ABS_FILE" "${DEPS[@]}" "${EXTRA_SOURCES[@]}" -o "$OUT_EXE" "${EXTRA_LIBS[@]}"
+g++ -std="$CXX_STD" -I"$PROJECT_ROOT" "${EXTRA_DEFINES[@]}" "${EXTRA_INCLUDES[@]}" "$ABS_FILE" "${DEPS[@]}" "${EXTRA_SOURCES[@]}" -o "$OUT_EXE" "${EXTRA_LIBS[@]}" "${DUCKDB_FLAGS[@]}"
 
 cd "$PROJECT_ROOT"
 "$OUT_EXE"

@@ -248,8 +248,25 @@ public:
         if (isParquetPath(kCSVMapping.path))
             throw std::runtime_error("getValue: raw cell access isn't supported for Parquet sources");
 
-        std::ifstream file(kCSVMapping.path);
-        if (!file) throw std::runtime_error(std::string("getValue: failed to open ") + kCSVMapping.path);
+        std::string filePath = kCSVMapping.path;
+        if (mdDetail::isDuckdbPath(filePath)) {
+#ifdef AZBT_DUCKDB
+            // exported once to a scratch CSV (with a header, like the code below expects) and kept across calls
+            static std::string openDuckPath;
+            static std::unique_ptr<_DuckdbCsv> duck;
+            if (!duck || openDuckPath != kCSVMapping.path) {
+                duck.reset();
+                duck = std::make_unique<_DuckdbCsv>(kCSVMapping.path, true);
+                openDuckPath = kCSVMapping.path;
+            }
+            filePath = duck->path();
+#else
+            throw std::runtime_error("getValue: DuckDB support isn't compiled in (AZBT_DUCKDB, see build.sh)");
+#endif
+        }
+
+        std::ifstream file(filePath);
+        if (!file) throw std::runtime_error("getValue: failed to open " + filePath);
 
         std::string line;
         std::getline(file, line); // header

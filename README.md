@@ -7,7 +7,7 @@
 
 **Before building, edit `config.toml` to map your data columns and set the data path. If the file doesn't exist, the first run will generate one with placeholder values.**
 
-AZBacktest is a C++17 backtesting framework for algorithmic trading strategies on tick data. Header-only API (also available as a single-header amalgamation), CSV and Parquet data support (Databento-style formats work out of the box), and an ImGui/ImPlot visualization window.
+AZBacktest is a C++17 backtesting framework for algorithmic trading strategies on tick data. Header-only API (also available as a single-header amalgamation), CSV, Parquet and DuckDB (SQL) data support (Databento-style formats work out of the box), and an ImGui/ImPlot visualization window.
 
 Note: Release files are frequently out of date. Clone and build the project if its missing a feature you require.  
 
@@ -59,7 +59,7 @@ TEST(myThingWorks) {
 
 No `main()` needed, `testFramework.h` supplies one. Assertions are `CHECK`, `CHECK_EQ`, `CHECK_NE`, `CHECK_NEAR`, `CHECK_F` (float compare at a fixed tolerance), and `REQUIRE`. Everything except `REQUIRE` is non-fatal, so one run surfaces every problem in a test rather than stopping at the first.
 
-Fixtures are CSV, so the Parquet backend isn't covered by these.
+Fixtures are CSV, so the Parquet backend isn't covered by these. The DuckDB backend has its own suite (`test_duckdb`), it builds its fixtures with DuckDB and runs when DuckDB is installed, otherwise it only checks the path helpers.
 
 ## Runner, bars and day numbers
 
@@ -103,12 +103,12 @@ for (;;) {
 
 ## Configuration
 
-Edit `config.toml` to point at your data file (CSV or Parquet, see below) and map column indices.
+Edit `config.toml` to point at your data file (CSV, Parquet or DuckDB, see below) and map column indices.
 If `config.toml` doesn't exist, the first run will generate one with placeholder values and exit so you can fill it in.
 Note: If you use the header file (from releases) you'd have to search for the mapping itself, and change it directly.
 
 ```toml
-# absolute path to the data file (CSV or Parquet)
+# absolute path to the data file (CSV, Parquet or DuckDB)
 path = "C:/path/to/your/data.csv"
 
 # column indices (0-indexed)
@@ -239,6 +239,18 @@ box             = true
 
 Note: I realize the vibecoded system for registering a column is overly complex, after doing it myself for `action`.   
 I will eventually write a guide and simplifiy the system. 
+
+## DuckDB / SQL data
+
+Point `path` at a DuckDB file (`.duckdb` or `.ddb`) and the data is read with SQL. Everything else in the config (column indices or header names, filters, extras, symbol roll, bar mode) works as it does for CSV, because the table is exported to a scratch CSV that is deleted when the `MarketData` is destroyed.
+
+```toml
+path = "C:/data/ticks.duckdb"                      # first table, by name
+path = "C:/data/ticks.duckdb#mnq_ticks"            # a named table
+path = "C:/data/ticks.duckdb#SELECT * FROM mnq_ticks WHERE size > 0 ORDER BY ts"   # any SELECT / WITH / FROM query
+```
+
+Timestamp columns (`TIMESTAMP`, `_S`, `_MS`, `_NS`) come out as ISO-8601 with nanoseconds, so the default `timeFormat` works. `TIMESTAMPTZ` needs DuckDB's `icu` extension, cast it to a plain `TIMESTAMP` in a query. Needs DuckDB's C library, `build.sh` links it when found (`pacman -S mingw-w64-x86_64-duckdb` on MSYS2, `brew install duckdb` on macOS) and builds without it otherwise.
 
 ## CSV toolkit
 
