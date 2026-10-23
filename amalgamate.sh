@@ -101,6 +101,7 @@ FILES=(
     "$SCRIPT_DIR/dataConfig.h"
     "$SCRIPT_DIR/src/csv.h"
     "$SCRIPT_DIR/src/marketData.h"
+    "$SCRIPT_DIR/src/hotDataHook.h"
     "$SCRIPT_DIR/src/backtestApi/dataManagement/data.h"
     "$SCRIPT_DIR/src/analytics/DayIndicators.h"
     "$SCRIPT_DIR/src/backtestApi/tradeManagement/tradeData.h"

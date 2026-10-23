@@ -12,8 +12,10 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -504,4 +506,143 @@ public:
     }
 };
 
+/// @brief random access to single cells of any Parquet file, as text. Backs
+/// DataApi::getValue, so unlike _ParquetMarketData it has no column type
+/// requirements: numbers, strings, dictionary strings and timestamps (ISO-8601,
+/// same layout as the CSV) all work. Keeps the last row group read per column,
+/// so scanning rows in order touches each group once per column.
+class _ParquetCells {
+private:
+    std::unique_ptr<parquet::arrow::FileReader> _reader;
+    int _numCols = 0;
+    std::vector<std::string> _names;
+    std::vector<int64_t> _groupStart; // cumulative rows, size == groups + 1
+    struct Cached { int group = -1; std::shared_ptr<arrow::Array> arr; };
+    std::vector<Cached> _cache;
+
+    const arrow::Array& column(int g, int col) {
+        Cached& c = _cache[static_cast<std::size_t>(col)];
+        if (c.group != g) {
+            auto t = _reader->ReadRowGroup(g, {col});
+            if (!t.ok()) throw std::runtime_error("ParquetCells: failed to read row group "
+                + std::to_string(g) + ": " + t.status().ToString());
+            auto combined = (*t)->CombineChunks();
+            if (!combined.ok()) throw std::runtime_error("ParquetCells: CombineChunks failed: " + combined.status().ToString());
+            c.arr = (*combined)->column(0)->chunk(0);
+            c.group = g;
+        }
+        return *c.arr;
+    }
+
+    static std::string format(const arrow::Array& a, int64_t i) {
+        if (a.IsNull(i)) return "";
+        char buf[48];
+        switch (a.type_id()) {
+            case arrow::Type::BOOL:   return static_cast<const arrow::BooleanArray&>(a).Value(i) ? "true" : "false";
+            case arrow::Type::UINT8:  return std::to_string(static_cast<const arrow::UInt8Array&>(a).Value(i));
+            case arrow::Type::UINT16: return std::to_string(static_cast<const arrow::UInt16Array&>(a).Value(i));
+            case arrow::Type::UINT32: return std::to_string(static_cast<const arrow::UInt32Array&>(a).Value(i));
+            case arrow::Type::UINT64: return std::to_string(static_cast<const arrow::UInt64Array&>(a).Value(i));
+            case arrow::Type::INT8:   return std::to_string(static_cast<const arrow::Int8Array&>(a).Value(i));
+            case arrow::Type::INT16:  return std::to_string(static_cast<const arrow::Int16Array&>(a).Value(i));
+            case arrow::Type::INT32:  return std::to_string(static_cast<const arrow::Int32Array&>(a).Value(i));
+            case arrow::Type::INT64:  return std::to_string(static_cast<const arrow::Int64Array&>(a).Value(i));
+            case arrow::Type::FLOAT: {
+                auto r = std::to_chars(buf, buf + sizeof buf, static_cast<const arrow::FloatArray&>(a).Value(i));
+                return std::string(buf, r.ptr);
+            }
+            case arrow::Type::DOUBLE: {
+                auto r = std::to_chars(buf, buf + sizeof buf, static_cast<const arrow::DoubleArray&>(a).Value(i));
+                return std::string(buf, r.ptr);
+            }
+            case arrow::Type::STRING:       return std::string(static_cast<const arrow::StringArray&>(a).GetView(i));
+            case arrow::Type::LARGE_STRING: return std::string(static_cast<const arrow::LargeStringArray&>(a).GetView(i));
+            case arrow::Type::DICTIONARY: {
+                const auto& d = static_cast<const arrow::DictionaryArray&>(a);
+                return format(*d.dictionary(), d.GetValueIndex(i));
+            }
+            case arrow::Type::TIMESTAMP: {
+                const auto unit = static_cast<const arrow::TimestampType&>(*a.type()).unit();
+                int n = mdDetail::formatIsoTimestamp(buf, sizeof buf,
+                    static_cast<long long>(static_cast<const arrow::TimestampArray&>(a).Value(i))
+                    * mdDetail::tsUnitToNanoMultiplier(unit));
+                return std::string(buf, static_cast<std::size_t>(n));
+            }
+            default:
+                throw std::runtime_error("ParquetCells: unsupported column type " + a.type()->ToString());
+        }
+    }
+
+public:
+    explicit _ParquetCells(const std::string& path) {
+        auto f = arrow::io::ReadableFile::Open(path);
+        if (!f.ok()) throw std::runtime_error("ParquetCells: open failed: " + path + " (" + f.status().ToString() + ")");
+        auto r = parquet::arrow::OpenFile(*f, arrow::default_memory_pool());
+        if (!r.ok()) throw std::runtime_error("ParquetCells: failed to open " + path + ": " + r.status().ToString());
+        _reader = std::move(*r);
+
+        std::shared_ptr<arrow::Schema> schema;
+        auto st = _reader->GetSchema(&schema);
+        if (!st.ok()) throw std::runtime_error("ParquetCells: failed to read schema of " + path + ": " + st.ToString());
+        _numCols = schema->num_fields();
+        for (const auto& fl : schema->fields()) _names.push_back(fl->name());
+
+        auto meta = _reader->parquet_reader()->metadata();
+        _groupStart.assign(static_cast<std::size_t>(meta->num_row_groups()) + 1, 0);
+        for (int g = 0; g < meta->num_row_groups(); g++)
+            _groupStart[static_cast<std::size_t>(g) + 1] = _groupStart[static_cast<std::size_t>(g)] + meta->RowGroup(g)->num_rows();
+        _cache.resize(static_cast<std::size_t>(_numCols));
+    }
+
+    int64_t rows() const { return _groupStart.back(); }
+    int cols() const { return _numCols; }
+    const std::string& name(int col) const { return _names[static_cast<std::size_t>(col)]; }
+
+    /// @brief cell at 0-indexed [row, col] as text, "" when either is out of range
+    std::string get(int64_t row, int col) {
+        if (row < 0 || row >= _groupStart.back() || col < 0 || col >= _numCols) return "";
+        const int g = static_cast<int>(std::upper_bound(_groupStart.begin(), _groupStart.end(), row) - _groupStart.begin()) - 1;
+        return format(column(g, col), row - _groupStart[static_cast<std::size_t>(g)]);
+    }
+};
+
+
+/// @brief a whole Parquet file written out as a scratch CSV, removed on destruction
+class _ParquetCsv {
+private:
+    std::string _path;
+
+public:
+    _ParquetCsv(const std::string& src, bool header, char delimiter = ',') {
+        _ParquetCells cells(src);
+        static int counter = 0;
+        const long long stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        _path = (std::filesystem::temp_directory_path() /
+                 ("azbt_parquet_" + std::to_string(stamp) + "_" + std::to_string(counter++) + ".csv")).generic_string();
+        try {
+            csv::WriteOptions wo;
+            wo.delimiter = delimiter;
+            csv::Writer out(_path, wo);
+            if (header) {
+                for (int c = 0; c < cells.cols(); ++c) out.field(cells.name(c));
+                out.endRow();
+            }
+            for (int64_t r = 0; r < cells.rows(); ++r) {
+                for (int c = 0; c < cells.cols(); ++c) out.field(cells.get(r, c));
+                out.endRow();
+            }
+            out.close();
+        } catch (...) {
+            std::remove(_path.c_str());
+            throw;
+        }
+    }
+
+    ~_ParquetCsv() { std::remove(_path.c_str()); }
+
+    _ParquetCsv(const _ParquetCsv&)            = delete;
+    _ParquetCsv& operator=(const _ParquetCsv&) = delete;
+
+    const std::string& path() const { return _path; }
+};
 #endif // AZBT_PARQUET
